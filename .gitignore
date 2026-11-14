@@ -1,0 +1,6 @@
+# build output and generated typings
+dist/
+.extension-js/
+extension-env.d.ts
+
+node_modules/

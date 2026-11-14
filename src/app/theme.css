@@ -1,0 +1,243 @@
+/**
+ * 管理页（偏好设置）与「我的划线」共用的基座：色彩变量、字体、按钮与链接。
+ * 页面各自的排版（padding、栅格）留在 page 级的样式里。
+ */
+:root {
+  color-scheme: light dark;
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --text: #1f2328;
+  /*
+   * 灰字只给「次于正文的元信息」：左栏的计数、列表行的元信息、详情页的日期与站点。
+   * 正文、标签、按钮、状态行一律用 `--text`。
+   */
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --accent: #d97706;
+  /*
+   * 实心按钮的底色。**比 `--accent` 亮一档**：`--accent` 用于焦点环与选中底色（要够深才看得见），
+   * 而实心按钮上写的是深色字，底越亮对比度越高。`#d97706` 配 `--on-accent` 只有 5.0:1，
+   * 偏发鸭；换成 `#f0b90b` 是 8.9:1（与工具栏角标同一个色）。
+   */
+  --accent-fill: #f0b90b;
+  /* 实心按钮上的字色。亮橙底只能配深色字：白字只有 1.8:1。 */
+  --on-accent: #1f2328;
+  --danger: #b42318;
+
+  /*
+   * 尺度。**只有一个出处**：字号、圆角、控件高、左右留白都从这里取，
+   * 页面级的 app.css / library.css 不要再写字面量——那正是上一轮
+   * 「左栏文字 12px、卡片标题 15px、列表标题 13px」各说各话的原因。
+   */
+  --fs-title: 20px; /* 页面标题（「偏好设置」） */
+  --fs-subtitle: 15px; /* 卡片标题、侧栏标题 */
+  --fs-body: 14px; /* 正文、划线原文、分组按钮 */
+  --fs-label: 13px; /* 字段名、按钮、元信息 */
+  --fs-xs: 12px; /* 计数、日期、脚注 */
+  --radius: 8px; /* 唯一的圆角值：控件、列表行、卡片全用它 */
+  --control-h: 36px; /* 输入框、下拉 */
+  --control-h-sm: 34px; /* 按钮 */
+  --gutter: 16px; /* 侧栏与内容区的左右留白（文字对齐的基准线） */
+  /*
+   * 滚动条宽度。**必须是固定值**：滚动条会占掉容器内容区的一截，
+   * 页头要按同一个数内缩，卡片的右缘才会和右上角那个链接对齐。
+   * （系统默认滚动条宽 15px，且各平台不一；指定后就确定了。）
+   */
+  --scrollbar: 12px;
+}
+
+/* 两个视图共用的细滚动条。滚动条固定 12px 宽，轨道透明，拇指内缩 3px。 */
+*::-webkit-scrollbar {
+  width: var(--scrollbar);
+  height: var(--scrollbar);
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--text) 20%, transparent);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--text) 34%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181d;
+    --card: #1e2128;
+    --text: #e6e8eb;
+    --muted: #9aa4b2;
+    --line: #2c313a;
+    --accent: #f59e0b;
+    /* 深色下已经是亮橙，与 `--accent` 同值即可。 */
+    --accent-fill: #f59e0b;
+    --on-accent: #14161a;
+    --danger: #f97066;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.6 system-ui, -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+}
+
+/*
+ * 按钮底座照 shadcn/ui 的 Button：高 34、圆角 8、13px 中等字重、极轻投影、
+ * 焦点环 3px。`.primary` 是实心 accent（配 `--on-accent` 深色字），
+ * `.ghost` 无边框无投影，`.danger` 只描红边——危险操作不该靠颜色纯度吓人。
+ */
+button,
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--control-h-sm);
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-label);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+  transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+button:hover:not(:disabled),
+.file-button:hover {
+  background: color-mix(in srgb, var(--text) 5%, var(--card));
+}
+
+button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 10%, var(--card));
+}
+
+button:focus-visible,
+.file-button:focus-within {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+button.primary {
+  border-color: transparent;
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  /* 悬停往暗里走一点：在亮底上提亮几乎看不出变化。 */
+  background: color-mix(in srgb, var(--accent-fill) 92%, #000);
+}
+
+button.ghost {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+}
+
+button.ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+button.danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+  background: transparent;
+  box-shadow: none;
+  color: var(--danger);
+}
+
+button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+.link {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+/*
+ * 页头：单行。标题在左，元信息跟着标题，导航靠右（`margin-left: auto`）。
+ * 只给偏好设置用：**「我的划线」没有页头**（那是白白占掉一条横向空间，
+ * 标题与入口搬到侧栏里）。
+ */
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.top h1 {
+  margin: 0;
+  font-size: var(--fs-title);
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+
+/* 两个视图互跳的入口。 */
+.topnav {
+  display: flex;
+  gap: 12px;
+  margin: 0 0 0 auto;
+  font-size: var(--fs-label);
+}
+
+/*
+ * 带箭头的跳转链接。箭头是内联 `<svg>`（lucide 的 `arrow-right` 路径），
+ * 不用 `→` 字符：字符的字宽与基线随字体变化，和后面的文字对不齐。
+ * 悬停时箭头右移 2px，作为「会跳走」的暗示。
+ */
+.icon-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.icon-link .arrow {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform 0.15s ease;
+}
+
+.icon-link:hover .arrow {
+  transform: translateX(2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .icon-link .arrow {
+    transition: none;
+  }
+}
+
+.empty {
+  margin: 0;
+  color: var(--text);
+}

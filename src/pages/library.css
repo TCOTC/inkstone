@@ -1,0 +1,422 @@
+/*
+ * 「我的划线」视图。全部限定在 `.library`（#root 上的 class）内，
+ * 避免与偏好设置里的 `.top` / `.card` 等通用类互相污染。
+ *
+ * 布局：`#root` 撑满视口（100vh），左右两栏**各自滚动**，页面本身不滚。
+ * **没有页头**——标题、计数与「偏好设置」入口都在左栏里，省掉一条横向空间。
+ *
+ * 对齐：一条垂直基准线 `--gutter`（16px）。左栏的标题、搜索框边框、列表行文字、
+ * 底部链接全部落在同一条线上；列表行的悬停底色向外多 8px，不破坏这条线。
+ */
+
+body.view-library {
+  padding: 0;
+  overflow: hidden;
+}
+
+body.view-library #root {
+  max-width: none;
+  height: 100vh;
+  margin: 0;
+  gap: 0;
+}
+
+/* 两栏：左栏定宽、右栏吃剩余空间。`min-height: 0` 是两栏能各自滚的前提。 */
+.library .layout {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 288px minmax(0, 1fr);
+}
+
+/* 左栏 = 标题 / 搜索 / 列表 / 底部入口。整体不滚，只有列表滚。 */
+.library .side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
+}
+
+/* 标题与计数同一行，基线对齐。 */
+.library .side-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 18px var(--gutter) 12px;
+}
+
+.library .side-head h1 {
+  margin: 0;
+  font-size: var(--fs-subtitle);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.library .side-count {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* 搜索框：边框左沿与标题文字同一条线。 */
+.library .search-wrap {
+  position: relative;
+  flex: none;
+  padding: 0 var(--gutter) 10px;
+}
+
+.library .search-icon {
+  position: absolute;
+  left: calc(var(--gutter) + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  /* 搜索框在 wrap 底部（下面还有 10px 内边距），所以图标再抬 5px 才居中。 */
+  margin-top: -5px;
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.library .search {
+  width: 100%;
+  height: var(--control-h-sm);
+  padding: 0 10px 0 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-label);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.library .search::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
+/* 与设置页的输入框同一套悬停与焦点反馈（数值见 app.css 的控件底座）。 */
+.library .search:hover {
+  border-color: color-mix(in srgb, var(--text) 24%, var(--line));
+}
+
+.library .search:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/*
+ * 列表：外层左右各 8px，行内再 8px，于是行文字正好落在 `--gutter`（16px）上，
+ * 而悬停底色从 8px 开始——文字对齐与更宽的点击区分开做。
+ *
+ * **底部不留内边距**：滚动容器的内边距会算进 `scrollHeight`，行数刚好放得下时
+ * 也凭空多出一截可滚高度（“全都看得见却还有滚动条”）。滚动区一直接到容器底边。
+ */
+.library .list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 8px;
+}
+
+/*
+ * 列表行。它是 `<button>`，必须把 theme.css 的按钮底座整体退回：
+ * 固定高、边框、投影、内容居中都会把两行标题挤坏。
+ */
+.library .row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: 8px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+
+.library .row:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.library .row.active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .library .row.active {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+  }
+}
+
+.library .row-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* ⚠️ 必须显式写 normal：`.library button` 给按钮加了 `white-space: nowrap`，
+     而标题是这个按钮里的 `<span>`，会**继承**到 nowrap → 标题不换行、直接被切掉。 */
+  white-space: normal;
+  font-size: var(--fs-label);
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.library .row.active .row-title {
+  font-weight: 600;
+}
+
+.library .row-meta {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* 「未定位」行：与页面行同形，用一条下边界把自己和真正的页面列表分开。 */
+.library .row.alert {
+  margin-bottom: 6px;
+  padding-bottom: 10px;
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* 左栏底部入口：文字回到基准线。 */
+.library .side-foot {
+  flex: none;
+  padding: 10px var(--gutter) 14px;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-label);
+}
+
+/*
+ * 右列：自己滚，内容限宽免得一行太长。留白用 24px（= 1.5 × gutter）。
+ * **底部同样不留内边距**：理由同 `.list`——滚动容器的内边距会变成可滚高度，
+ * 内容刚好放得下时也会出现滚动条；而且那条空白本身也白占地方。
+ */
+.library .detail {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 18px 24px 0;
+}
+
+.library .detail-inner {
+  max-width: 660px;
+}
+
+/* 页头三行：标题 / 元信息 / 动作。与左栏标题对齐到同一条顶线（18px）。 */
+.library .detail-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 16px;
+}
+
+.library .detail-head h2 {
+  margin: 0;
+  font-size: var(--fs-subtitle);
+  font-weight: 650;
+  line-height: 1.4;
+  letter-spacing: -0.01em;
+  word-break: break-word;
+}
+
+/* 站点 · 日期 · 条数。次一级的元信息，用灰字。 */
+.library .detail-meta {
+  margin: 0;
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+.library .actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/*
+ * 这个视图的按钮比设置页小一档：它们嵌在列表行与条目里，
+ * `--control-h-sm`（34px）会把行撑高。28px 与 13px 正文相称。
+ */
+.library button {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
+  /* 按钮文字不折行：窄容器里「打开页面」会被折成两行，行高被撑破。 */
+  white-space: nowrap;
+  box-shadow: none;
+}
+
+.library button.small {
+  height: 26px;
+  padding: 0 9px;
+}
+
+/* 空状态里的整宽按钮。 */
+.library button.block {
+  width: 100%;
+  margin-top: 10px;
+}
+
+/* 列表里的空文案：外层已有 8px，再补 8px 才落在 `--gutter` 那条线上。 */
+.library .list > .empty {
+  margin: 6px 8px 0;
+  font-size: var(--fs-label);
+}
+
+/* 空库：侧栏只留一行说明，真正的入口放在右列（与其它右列内容的左沿一致）。 */
+.library .detail-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+/* 划线：原文是主体。左边一条 accent 细线 + 极淡同色底表达「这段被划过」。 */
+.library .highlights {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/*
+ * 划线卡片：与其它卡片一样是白底 + 1px 边框。
+ * **不要左边那道 accent 竖条**：产品只有一种划线色，条条都挂等于没信息，
+ * 还让每张卡的文字左沿往里缩 3px，与页头标题对不齐。
+ */
+.library .hl {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.library .hl-text {
+  margin: 0;
+  font-size: var(--fs-body);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.library .hl-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.library .hl-date {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+}
+
+/* 未定位：按页分组，每行只有原文。没有错误码、没有「为什么」的解释。 */
+.library .unresolved {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.library .unresolved-page {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 12px 14px;
+}
+
+.library .unresolved-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+/* 按钮不参与收缩：标题再长也不往按钮上挤。 */
+.library .unresolved-head button {
+  flex: none;
+}
+
+.library .unresolved-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--fs-label);
+  font-weight: 600;
+}
+
+.library .unresolved-line {
+  margin: 0;
+  padding: 7px 0;
+  border-top: 1px solid var(--line);
+  font-size: var(--fs-label);
+  line-height: 1.6;
+  color: var(--text);
+  word-break: break-word;
+}
+
+.library .unresolved-line:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
+/*
+ * 窄屏：改成**单列 + 页面自己滚**。
+ * 两栏各自滚只在宽屏成立——窄屏把列表压成 36vh 之后，一屏只放得下一行半，
+ * 每条都要在一个小窗口里滚，比整页滚难用得多。
+ */
+@media (max-width: 720px) {
+  body.view-library {
+    overflow: visible;
+  }
+
+  body.view-library #root {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .library .layout {
+    display: block;
+  }
+
+  .library .side {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .library .side-head {
+    padding-top: 14px;
+  }
+
+  /* 列表不再自己滚：跟着页面一起流。 */
+  .library .list {
+    flex: none;
+    overflow: visible;
+    padding-bottom: 12px;
+  }
+
+  /* 窄屏这一列不是滚动容器（页面自己滚），底部留白是文档留白，可以留。 */
+  .library .detail {
+    overflow: visible;
+    padding: 18px var(--gutter) 48px;
+  }
+}

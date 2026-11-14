@@ -1,0 +1,35 @@
+{
+  "private": true,
+  "name": "inkstone",
+  "description": "Chrome 扩展，支持在网页划选文字高亮、翻译、解释",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=26.12"
+  },
+  "scripts": {
+    "build": "extension build",
+    "dev": "extension build --mode development",
+    "watch": "node tools/watch.mjs",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "node --import ./tools/ts-hooks.mjs --test",
+    "verify": "node tools/verify-build.mjs",
+    "icons": "node tools/generate-icons.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.3.4",
+    "@types/node": "^26.6.4",
+    "@vue/compiler-sfc": "3.5.45",
+    "extension": "4.1.30",
+    "typescript": "6.0.3",
+    "vue-loader": "17.4.2",
+    "vue-tsc": "^3.3.14"
+  },
+  "packageManager": "pnpm@11.25.0",
+  "dependencies": {
+    "lucide": "1.72.0",
+    "marked": "18.2.0",
+    "vue": "3.5.45"
+  }
+}

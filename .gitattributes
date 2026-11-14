@@ -1,0 +1,13 @@
+# 入库与检出都用 LF：避免 Windows / macOS / Linux 之间出现整文件 diff。
+# `eol=lf` 是关键——只写 `text=auto` 时检出侧仍跟随本机 core.autocrlf
+# （Windows 默认 true，工作区就成了 CRLF），跨机器的 diff 照样会脏。
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+
+# pnpm-lock.yaml 由 pnpm 生成，不要做行尾转换。
+pnpm-lock.yaml -text

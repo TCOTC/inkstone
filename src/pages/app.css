@@ -1,0 +1,509 @@
+body {
+  padding: 32px 20px 64px;
+}
+
+#root {
+  max-width: 760px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gutter);
+}
+
+/*
+ * 偏好设置是「页头固定 + 右栏滚动」：整个页面不滚，只有分组内容区滚。
+ * 左栏跟着页头一起停住——它本来就短，让它滚没意义，而且滚起来会跑到标题下面去。
+ *
+ * **只留上、左、右 24px，底部不留**：滚动区一直接到视口底边，白占一条空白没意义。
+ * 右边靠 `padding` 而不是让滚动容器自己带内边距：滚动容器的内边距会算进 `scrollHeight`，
+ * 内容刚好放得下时也凭空多出一截可滚高度，于是“全都看得见却仍有滚动条”。
+ */
+body.view-settings {
+  height: 100vh;
+  overflow: hidden;
+  padding: 24px 24px 0;
+}
+
+body.view-settings #root {
+  height: 100%;
+  max-width: 960px;
+  gap: 0;
+}
+
+/* 左栏分组 + 右侧只渲染当前组。`min-height: 0` 是让子项能自己滚的前提。 */
+.settings {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 140px minmax(0, 1fr);
+  gap: 32px;
+  align-items: stretch;
+}
+
+/*
+ * 左栏：**文字**与页头标题同一条竖线。按钮自带 12px 左内边距，所以整列左移 12px——
+ * 文字回到 0，选中块的底色向左多出 12px（VSCode / GitHub 侧栏的做法）。
+ */
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: -12px;
+}
+
+/* 高度与按钮同为 `--control-h-sm`：两者圆角都是 `--radius`，高度也一样才看着是一套。 */
+.nav-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 100%;
+  /* 它是 `<button>`，会吃到 theme.css 的按钮底座；这里全部退回成纯文字块。 */
+  height: var(--control-h-sm);
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-nav .nav-item:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.settings-nav .nav-item.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  font-weight: 600;
+}
+
+/* 深色下 16% 的橙几乎看不见，抬到 24%。 */
+@media (prefers-color-scheme: dark) {
+  .settings-nav .nav-item.active {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+  }
+}
+
+/*
+ * 唯一滚动容器。
+ *
+ * `scrollbar-gutter: stable` 预留滚动条槽，切换分组时内容不会左右横跳；
+ * 但它会**占掉内容区 12px**，卡片右缘就比页头那个链接短一截。
+ * 所以再把这 12px 用负外边距推到 `#root` 外面：槽位落在页面留白里，
+ * 卡片的右缘正好回到 `#root` 的右边（= 页头链接右边），也不会留一条灰色空带。
+ *
+ * **四周内边距必须为 0**：内边距算进 `scrollHeight`，会让“内容刚好放得下”也出现滚动条。
+ * 底部留白由 `body.view-settings` 的 `padding` 提供（见上面那段说明）。
+ */
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gutter);
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  margin-right: calc(-1 * var(--scrollbar));
+  padding: 0;
+  /* 滚动到端点时不把滚动传给页面（页面本来也不滚）。 */
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 720px) {
+  body.view-settings {
+    padding: 16px 16px 0;
+  }
+
+  .settings {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  /* 窄屏左栏变横排 tab：自己滚就不是好主意，让它回到文档流顶部。 */
+  .settings-nav {
+    flex-direction: row;
+    gap: 4px;
+    overflow-x: auto;
+    flex: none;
+    margin-left: 0;
+  }
+
+  /* `width: 100%` 是竖排时的规则：横排时不收窄，否则每个按钮各占一整行。 */
+  .nav-item {
+    flex: 0 0 auto;
+    width: auto;
+    justify-content: center;
+    text-align: center;
+  }
+}
+
+/*
+ * 页头排版（.top / h1 / .count-chip / .topnav）在 theme.css。
+ * 这里只管高度：页头与下面两栏一起撑满视口。
+ * 右缘**不需要**内缩——`.settings-body` 的滚动条槽已被负外边距推到 `#root` 外。
+ */
+body.view-settings .top {
+  padding-bottom: 20px;
+  flex: none;
+}
+
+/* 统计那行是纯文本，但高度与 `.row` 对齐（36），
+   否则它与「画笔」「API Key」这些控件行在纵向节拍上差 8px。 */
+.stats {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h);
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-label);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  /* 16 的栅格：卡片内容与字段、标签全部对齐到同一条左沿。 */
+  padding: 16px;
+}
+
+.card h2 {
+  margin: 0;
+  font-size: var(--fs-subtitle);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/*
+ * 卡片内的一组字段。靠 `gap` 分隔，不再画横线：
+ * 一条条 1px 分隔线在单列卡片里是噪音（有边框的卡片已经把内容圈起来了）。
+ */
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+/* 一行：标签左、控件右。`min-height` 与控件同高，标签才垂直居中。 */
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gutter);
+  min-height: var(--control-h);
+}
+
+/* 标签不参与收缩：右侧控件有固定宽度，窄屏时会把「API Key」压成两行。 */
+.row > span:first-child {
+  flex: none;
+  font-size: var(--fs-label);
+}
+
+/*
+ * 输入类控件的统一底座：高 36、圆角 8、1px 边框、极轻投影。
+ * 数值照 shadcn/ui 的 input / select（h-9、rounded-md、shadow-xs、focus 时 3px ring）。
+ * **两个控件同宽**（240）：一列里左右两侧的边沿都成一条线。
+ */
+select,
+input.text {
+  width: 240px;
+  max-width: 100%;
+  height: var(--control-h);
+  min-width: 0;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-label);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+select {
+  /* 原生箭头在各平台不一样，统一换成自绘的 chevron（`appearance: none` 后必须自己补）。 */
+  padding-right: 32px;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238a8f98' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  cursor: pointer;
+}
+
+select:hover,
+input.text:hover {
+  border-color: color-mix(in srgb, var(--text) 24%, var(--line));
+}
+
+select:focus-visible,
+input.text:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* 一行按钮 + 状态回执。 */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 提示词：每个动作一组，组间一条淡分隔线。 */
+.prompt-group {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.prompt-group:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.group-label {
+  font-size: var(--fs-label);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.prompt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompt-caption {
+  font-size: var(--fs-label);
+  color: var(--text);
+}
+
+/* 字段名 + 分段控件 + 校验错误，挤在同一行：分成两行会让四个字段块在纵向上翻倍。 */
+.prompt-field-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+/*
+ * 分段控件（segmented control）：两个互斥选项做成一段胶囊，选中的那块浮起来。
+ * 比两个 radio 点更省空间，状态也更好扫。radio 本体藏起来保住键盘与读屏语义。
+ */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+/* 高度对齐按钮（小节里的「小按钮」是 26）：两块并排时不会一高一矮。 */
+.segmented label {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.segmented label:hover {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.segmented label.on {
+  background: var(--card);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 14%);
+}
+
+/*
+ * 深色下 `--card` 比容器（叠了 7% 白）**更暗**，选中块看上去是凹下去的。
+ * 这里改成提亮：16% 的正文色混进卡片色，与容器拉开一档。
+ */
+@media (prefers-color-scheme: dark) {
+  .segmented label.on {
+    background: color-mix(in srgb, var(--text) 16%, var(--card));
+  }
+}
+
+/* radio 只留语义：不用 `display:none`，否则键盘与读屏都摸不到它。 */
+.segmented input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.segmented label:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.prompt-field textarea {
+  width: 100%;
+  min-height: 92px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text);
+  font: var(--fs-label)/1.6 ui-monospace, SFMono-Regular, Consolas, monospace;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 4%);
+  /* 只允许纵向拉：横向拉会把整张卡片撑出滚动条。 */
+  resize: vertical;
+}
+
+.prompt-field textarea:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/*
+ * 开关：外观自己画，语义仍是原生 checkbox（模板里的 `role="switch"`）。
+ * 36×20 / 圆点 16 / 内缩 2：与 Chrome 设置、iOS 同一比例，比 38×22 更轻。
+ */
+input[type='checkbox'] {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 20px;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 20%, transparent);
+  cursor: pointer;
+  transition: background-color 0.18s ease;
+}
+
+input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 28%);
+  transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+input[type='checkbox']:checked {
+  background: var(--accent);
+}
+
+input[type='checkbox']:checked::before {
+  /* 轨道内宽 36 - 圆点 16 - 左右各 2 = 16。 */
+  transform: translateX(16px);
+}
+
+input[type='checkbox']:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  input[type='checkbox'],
+  input[type='checkbox']::before {
+    transition: none;
+  }
+}
+
+/*
+ * 文件选择器做成按钮样：原生 `input[type=file]` 在各平台的样式无法统一，
+ * 这里把它铺满整个 label 并设透明，视觉完全由 label 承担。
+ */
+.file-button {
+  position: relative;
+  overflow: hidden;
+}
+
+.file-button input[type='file'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+/* 成功态的**文字**仍用正文色（accent 橙在白底只有 3.4:1），只用边框报色。 */
+.status.ok {
+  color: var(--text);
+}
+
+.status.error {
+  color: var(--danger);
+}
+
+/* 保存反馈：全页唯一一处。`ok` 短暂出现，`error` 常驻到下一次操作。 */
+.toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  margin: 0;
+  max-width: min(420px, calc(100vw - 40px));
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%), 0 1px 2px rgb(0 0 0 / 8%);
+  pointer-events: none;
+}
+
+.toast.ok {
+  border-color: var(--accent);
+}
+
+.toast.error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.danger h2 {
+  color: var(--danger);
+}
+
+/*
+  窄屏：控件不再保固定宽度，跟着卡片走。
+  ⚠️ 这段必须放在文件末尾：`select` / `input.text` 的 `width` 定义在上方，
+  同特异度下后写的赢；放在前面会被那两条盖掉（表现为控件撑出卡片）。
+*/
+@media (max-width: 720px) {
+  .row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  select,
+  input.text {
+    width: 100%;
+    flex: 1 1 100%;
+  }
+}
