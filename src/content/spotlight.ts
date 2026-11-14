@@ -11,6 +11,9 @@
  * - `requestAnimationFrame` 循环重算位置，**连续 15 帧位移小于 1px** 就认为滚动停了；
  * - 停下后停留 **1000ms**，然后 `opacity: 0`（0.3s 过渡），再过 **300ms** 移除。
  *
+ * 循环在框可见期间**一直跑**，所以在停留的那 1 秒里再滚一次也跟得上：
+ * 位移一出现就把停留计时清零、重新按「停稳 1 秒」算起，而不是让框僵在原地。
+ *
  * 两处刻意的选择：
  * 1. **颜色**：用划线 hover 时的亮黄（`HOVER_COLOR`）而不是红。
  *    亮黄在黄底划线周围会糊成一片，所以额外加了一圈 1px 的深色外环与黄色微光，
@@ -98,7 +101,7 @@ export class Spotlight {
     this.box.style.opacity = '1'
     this.paint(union)
 
-    let lastTop = Number.parseFloat(this.box.style.top)
+    let lastTop = union.y - 4
     let stable = 0
 
     const tick = (): void => {
@@ -109,25 +112,42 @@ export class Spotlight {
       if (box) this.paint(box)
 
       const top = Number.parseFloat(this.box.style.top)
-      if (Number.isFinite(top) && Math.abs(top - lastTop) < 1) stable += 1
-      else stable = 0
+      if (Number.isFinite(top) && Math.abs(top - lastTop) < 1) {
+        stable += 1
+      } else {
+        // 又动了（用户手动滚 / 上一段平滑滚动还没停）：停留计时作废，出框重新等。
+        stable = 0
+        this.cancelHold()
+      }
       lastTop = top
 
-      if (stable < STABLE_FRAMES) {
-        this.frame = requestAnimationFrame(tick)
-        return
+      // 停稳之后才起表；边界过了也一直跟，直到真开始淡出。
+      if (stable >= STABLE_FRAMES && !this.holdTimer) {
+        this.holdTimer = window.setTimeout(() => this.fade(), HOLD_MS)
       }
-      this.holdTimer = window.setTimeout(() => {
-        this.holdTimer = 0
-        this.box.style.opacity = '0'
-        this.removeTimer = window.setTimeout(() => {
-          this.removeTimer = 0
-          this.box.classList.add('hidden')
-        }, FADE_MS)
-      }, HOLD_MS)
+      this.frame = requestAnimationFrame(tick)
     }
 
     this.frame = requestAnimationFrame(tick)
+  }
+
+  /** 开始淡出：先停掉跟随循环，再等过渡结束把框藏起来。 */
+  private fade(): void {
+    this.holdTimer = 0
+    if (this.frame) cancelAnimationFrame(this.frame)
+    this.frame = 0
+    this.box.style.opacity = '0'
+    this.removeTimer = window.setTimeout(() => {
+      this.removeTimer = 0
+      this.box.classList.add('hidden')
+    }, FADE_MS)
+  }
+
+  /** 有位移就撤掉停留计时（还没起表时什么都不做）。 */
+  private cancelHold(): void {
+    if (!this.holdTimer) return
+    window.clearTimeout(this.holdTimer)
+    this.holdTimer = 0
   }
 
   /** 立刻撤掉（换页、关扩展、用户又点别的地方时）。 */
