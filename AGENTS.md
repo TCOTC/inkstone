@@ -147,6 +147,15 @@ pnpm test && pnpm build && pnpm typecheck && pnpm verify
 `build` 必须排在 `typecheck` 前：`extension-env.d.ts`（`chrome` 全局类型与 `*.css` 模块声明）
 由构建生成且不入库。新 clone 直接 `pnpm typecheck` 会报一堆 `Cannot find name 'chrome'`。
 
+## 提交消息
+
+**只写一行主题，简洁优先。**
+
+- 一句话说清「改了什么」，祈使/陈述都可以，**不加句号**，一般不超过 50 字。
+- 前缀（`feat:` / `fix:` / `chore:`）和分类标签**都不要**：只有一条主线时它们是噪音。
+- 正文只在「为什么」无法从 diff 看出时才写，同样一句话说完；不要复述改了哪些文件、
+  不要贴代码、不要写「此提交…」。
+
 ## 调试要点
 
 - **先分清「定位错」还是「渲染丢了」**：定位失败会进「未定位」清单（带 `errCode`）；

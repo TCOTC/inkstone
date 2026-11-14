@@ -4,3 +4,7 @@ dist/
 extension-env.d.ts
 
 node_modules/
+
+# 浏览器自动化（Playwright MCP）的截图 / 快照落盘
+.playwright-mcp/
+

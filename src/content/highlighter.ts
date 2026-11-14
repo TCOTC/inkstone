@@ -379,19 +379,56 @@ export class Highlighter {
     return items
   }
 
-  /** 滚动到某条划线：`scrollIntoView({block: 'center', behavior: 'smooth'})`。 */
+  /**
+   * 滚动到某条划线：`scrollIntoView({block: 'center', behavior: 'smooth'})`。
+   * 落点可能被折叠容器藏起来（见 `openFoldedAncestors`），那时先展开、再补滚。
+   */
   scrollTo(id: number): boolean {
     for (const entry of this.entries) {
       if (entry.id !== id) continue
       const first = entry.ranges[0]
       const host = first?.startContainer.parentElement
       if (!host) return false
-      host.scrollIntoView({block: 'center', behavior: 'smooth'})
+      if (!openFoldedAncestors(host)) {
+        host.scrollIntoView({block: 'center', behavior: 'smooth'})
+        return true
+      }
+      // 刚落位时坐标还是旧的：子树才参与布局，懒加载的图片随后还会把内容继续撑高。
+      // 平滑滚动等于一路追一个移动的目标，所以这里直接落位，再补两次校正。
+      this.measured = null
+      host.scrollIntoView({block: 'center'})
+      for (const delay of FOLDED_SCROLL_SETTLE_MS) {
+        window.setTimeout(() => host.scrollIntoView({block: 'center'}), delay)
+      }
       return true
     }
     return false
   }
 }
+
+/**
+ * 跳转前把折叠的祖先 `<details>` 展开，返回是否真的展开过。
+ *
+ * 折叠态在 Chrome 里等于 `content-visibility: hidden`：子树不参与绘制，
+ * `getBoundingClientRect()` 给的是过期坐标，`scrollIntoView()` **完全是空操作**。
+ * 站点把内容按月份收进 `<details>` 时，高亮照样能定位（文本还在 DOM 里），
+ * 但点标记点、点面板行都不会滚——就是这里缺的一步。
+ */
+function openFoldedAncestors(node: Node): boolean {
+  let opened = false
+  let element: Element | null = node instanceof Element ? node : node.parentElement
+  while (element) {
+    if (element.localName === 'details' && !(element as HTMLDetailsElement).open) {
+      ;(element as HTMLDetailsElement).open = true
+      opened = true
+    }
+    element = element.parentElement
+  }
+  return opened
+}
+
+/** 展开折叠容器后补滚的延时：懒加载的图片会把这之后的内容继续撑高。 */
+const FOLDED_SCROLL_SETTLE_MS = [150, 500]
 
 /** 两个 Range 数组是否指向同一批对象（用来跳过无变化的高亮组）。 */
 function sameRanges(left: readonly Range[], right: readonly Range[]): boolean {
