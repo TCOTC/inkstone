@@ -59,6 +59,14 @@ function currentInstance(): ContentInstance | undefined {
 
 /** 有未定位的划线时，DOM 变动触发的重试最小间隔（正文常是后加载的）。 */
 const UNRESOLVED_RETRY_MS = 5000
+/**
+ * 脱钩后等多久才彻底拆干净。
+ *
+ * 两种脱钩要区别对待：**更新**时新实例会在 1~2 秒内注入并接管（它自己会调 `teardown`），
+ * 这段时间保留 UI 才不会闪一下；而**停用 / 卸载**之后再没有任何代码会来接管，
+ * 留着宿主、监听与高亮就是往用户页面上永久塞垃圾。所以给更新留个宽限期，超时就全拆。
+ */
+const STALE_CLEANUP_MS = 10_000
 /** 弹划词工具条的延时。 */
 const TOOLBAR_DELAY = 50
 /** 检测「站点是否禁用选择」的最小间隔，避免每次空 mouseup 都扫一遍。 */
@@ -179,7 +187,13 @@ async function boot(): Promise<void> {
   let items: RenderItem[] = []
   let lastReport = ''
   let observedUrl = hashlessUrl(location.href)
-  /** 扩展已经和本页脱钩（更新 / 停用 / 卸载），页面上的东西都已拆掉 */
+  /**
+   * 扩展已经和本页脱钩（更新 / 停用 / 卸载）。
+   *
+   * 脱钩本身**不改页面**：高亮是纯 CSS，浮层也已经在页面里，先按原样留着——更新场景下
+   * 新实例几十毫秒到几秒内就到，拆了又建只会让人看到一次闪烁。宽限期过了还没人来接管
+   * （说明是停用 / 卸载）才彻底拆干净，见 `enterStale()`。
+   */
   let stale = false
   /** 本页未定位的划线（面板底部单独一块） */
   let unresolvedItems: UnresolvedItem[] = []
@@ -238,10 +252,23 @@ async function boot(): Promise<void> {
     }
   }
 
+  /**
+   * 脱钩后**先不拆 UI**：高亮、命中检测与浮层都是纯 DOM/CSS，照常工作；只有存储与消息失效。
+   *
+   * 但宽限期（`STALE_CLEANUP_MS`）一到就没人能来接管了——只有更新会让新实例及时注入，
+   * 停用 / 卸载不会。那时必须 `teardown()`，否则宿主节点、`document` 监听与
+   * `CSS.highlights` 注册会一直挂在用户页面上。
+   */
   function enterStale(): void {
     if (stale) return
     stale = true
     hideFloats(false)
+    const timer = window.setTimeout(() => {
+      // 已被新实例接管（或已经拆过）就不必再拆一次。
+      if (disposed) return
+      teardown()
+    }, STALE_CLEANUP_MS)
+    disposeLater(() => window.clearTimeout(timer))
   }
 
   /**
@@ -755,6 +782,9 @@ async function boot(): Promise<void> {
 
   /**
    * 把自己拆干净：撤监听 / 定时器 / 观察者，断开 AI 长连接，清掉共享的高亮注册表与宿主。
+   *
+   * 两个调用方：新实例接管（`boot()` 开头）与脱钩宽限期到期（`enterStale()`）。
+   * 前者要在旧实例的 `chrome.*` 已失效时也能跑通，所以每个 disposer 都单独 try。
    *
    * 顺序有讲究：**先撤监听**（否则拆除过程中页面事件还会回来写新实例的状态），
    * 再停 rAF / 断开端口，最后清注册表与宿地。
