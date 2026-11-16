@@ -30,7 +30,8 @@ pnpm build
 | `storage` | 存划线、设置与未定位清单（同时覆盖 `storage.sync`） |
 | `contextMenus` | 右键菜单（图标上的入口、页面上的「复制标题和链接」） |
 | `clipboardWrite` | 右键菜单触发的复制（没有页面手势，`execCommand` 需要它） |
-| `scripting` + `activeTab` | 扩展更新后旧标签页里的复制（`executeScript` 在当次点击内注入，用完即止） |
+| `scripting` | 扩展更新后把已打开的标签页换成新脚本，不必逐页刷新 |
+| `host_permissions: <all_urls>` | 上一行的重注入要对每个标签页有该页权限；AI 请求也靠它绕 CORS |
 | `host_permissions: api.deepseek.com` | 翻译 / 解释的请求 |
 
 翻译 / 解释需要一个 DeepSeek API Key：加密后随偏好设置同步到别的设备（同步区里也只有密文），

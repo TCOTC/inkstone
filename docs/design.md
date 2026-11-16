@@ -281,40 +281,62 @@ storage 的 `get` 与 `set` 之间没有事务，「读 → 改 → 写」必须
 
 Chrome 不会把已注入的 content script 从打开的标签页里换掉。更新 / 停用 / 卸载后，旧脚本还在
 页面里、`CSS.highlights` 与浮层也还在，但 `chrome.*` 全部失效（任何调用都抛
-`Extension context invalidated`），也没有 API 能让旧页面换用新扩展。
+`Extension context invalidated`）。**也没有 API 能卸载它**——只能注入新的，让新的把旧的拆掉。
 
-关键是分清哪些能力真的没了：已画的高亮、hover、命中检测、浮层与标记点的定位**都是纯 DOM/CSS，
-照常工作**；失效的只有存储与消息。
+所以分两层处理。
 
-所以处理方式是**降级而不是拆除**：不拆 UI、不擦高亮（擦了会让用户以为划线丢了），
-只把入口换成「刷新」——划词 / 点划线弹出的工具条只显示一个刷新按钮，点了 `location.reload()`。
-要碰 `chrome.*` 的路径统一先判活，失效就跳过，不抛错。
+**第一层：更新后重注入所有已开标签页。** background 每次启动都算一遍内容脚本产物的
+构建指纹（产物内容哈希），与记账值不同就 `executeScript` 把所有已打开的标签页换成新脚本。
+用指纹而不是版本号，是因为开发版每次 rebuild 版本号都不动。
 
-判活用「每秒问一句」的轮询，挂在既有的换页检测定时器上，不额外起定时器。**不用长连接**：
-端口断开既可能是扩展没了，也可能是 service worker 正常休眠，那条路要重连 + 心跳，
-等于主动把 worker 一直叫醒。
+**记账必须放 `chrome.storage.session`**：worker 因空闲被回收时它保留，所以同一个构建
+不会反复注入；而扩展被 reload / 更新时 Chromium 会清空它
+（`SessionStorageManager::OnExtensionUnloaded` → `Clear`），记账归零，于是「点刷新扩展
+但没重新 build」也会重注入——那正是最常碰到的场景。放 `local` 会漏掉它。
+两者都要放在 worker 启动时算，因为开发者模式点「刷新扩展」不保证触发 `onInstalled`。
+`executeScript` 只打到 `https?` / `file` 且有活文档的标签页：被回收（`discarded`）与冻结
+（`status: 'unloaded'`）的标签页点回去时会整页重载，那时清单注入的本来就是新脚本。
 
-**右键菜单是个例外**：菜单项是浏览器 UI，旧页面上照常出现，但点下去没有接收方
-（`tabs.sendMessage` 报「Receiving end does not exist」），页面自己救不了自己。
-这一条改用 `chrome.scripting.executeScript` 注入两个**自包含**函数当场做完：
-一个读 `document.title` / canonical / og:url，一个写剪贴板并闪一句提示。
-注入的脚本属于当前这个扩展实例，`chrome` 是活的，页面也还在原地——
-所以既不用刷新页面，也不用重做那次点击。`activeTab` 由「选中上下文菜单项」授予，
-因此不需要 `<all_urls>`。挑选与拼装仍复用 `shared/copyLink.ts`（注入的函数不能 import，
-所以它只负责读原始候选）。
+代价是 `host_permissions` 必须包含 `<all_urls>`（见第八节），换来的是**更新后不必逐页刷新**。
+
+**第二层：新实例接管旧实例。** 注入的新脚本与旧脚本在**同一个** isolated world 里，
+共享 `globalThis` 与 `CSS.highlights`。所以约定每个实例启动时把自己登记在
+`globalThis.__inkstoneInstance`，并给出一个能拆干净自己的 `teardown()`（撤掉
+`document` / `window` 监听、断开 AI 长连接、停 rAF、清注册表、删 Shadow 宿主）。
+新实例进来先调旧的 `teardown()`，再按标签名兜底清一遍 `inkstone-*` 宿主——
+后者是为了让**第一次升级**（旧版本还不认识这个约定）也能顺利接管。
+
+在途的异步（存储读、颜色主题变化）用 `disposed` 标志早退：同一个 world 的注册表是共享的，
+旧实例晚到的重画会盖掉新实例的结果。
+
+降级路径仍然保留，覆盖第二层失败的情形（注入被站点 CSP 拒绝、页面正在导航、
+`file://` 未开文件访问）：不拆 UI、不擦高亮（擦了会让用户以为划线丢了），只把入口换成
+「刷新」——划词 / 点划线弹出的工具条只显示一个刷新按钮，点了 `location.reload()`。
+判活仍是「每秒问一句」的轮询，挂在既有的换页检测定时器上，**不用长连接**：端口断开既可能
+是扩展没了，也可能是 service worker 正常休眠。
+
+**右键菜单另有一条独立兜底**：菜单项是浏览器 UI，旧页面上照常出现，但点下去没有接收方
+（`tabs.sendMessage` 报「Receiving end does not exist」）。这条路径改用
+`executeScript` 注入两个**自包含**函数当场做完：一个读 `document.title` / canonical /
+og:url，一个写剪贴板并闪一句提示。挑选与拼装仍复用 `shared/copyLink.ts`
+（注入的函数不能 import，所以它只负责读原始候选）。这条比重注入更便宜也更可靠，
+所以即使重注入已经成功，它也留着。
 
 ## 八、权限
 
 | 项 | 值 | 为什么 |
 | --- | --- | --- |
-| `permissions` | `storage`、`contextMenus`、`alarms`、`clipboardWrite`、`scripting`、`activeTab` | 存数据；右键菜单（图标上两项、页面上两对复制项，分别吃 `page` 与 `selection` 上下文）；定时备份（MV3 的 worker 会被回收，`setTimeout` 活不过去）；菜单触发的复制没有页面手势，`execCommand('copy')` 需要 `clipboardWrite`；扩展更新后旧标签页的复制靠 `executeScript` 注入，`activeTab` 由「选中上下文菜单项」授予 |
-| `host_permissions` | `https://api.deepseek.com/*` | AI 请求从 service worker 发出，扩展 origin 的 `fetch` 要靠 host 权限才不受 CORS 约束 |
-| `optional_host_permissions` | `https://github.com/*`、`https://api.github.com/*` | GitHub 备份。点「连接 GitHub」时才 `permissions.request`，安装时不弹警告 |
+| `permissions` | `storage`、`contextMenus`、`alarms`、`clipboardWrite`、`scripting` | 存数据；右键菜单（图标上两项、页面上两对复制项，分别吃 `page` 与 `selection` 上下文）；定时备份（MV3 的 worker 会被回收，`setTimeout` 活不过去）；菜单触发的复制没有页面手势，`execCommand('copy')` 需要 `clipboardWrite`；`scripting` 用于更新后往已打开标签页重注入、以及脱钩页面的复制兜底 |
+| `host_permissions` | `<all_urls>` | 重注入要对每个标签页有该页权限（`activeTab` 只在用户点击那一刻有效）；顺带覆盖读 `tab.url`、AI 请求绕过 CORS、GitHub 备份 |
 | `minimum_chrome_version` | 130 | `storage.local.getKeys`（4.2 的第二级查找只读键名） |
 
-`content_scripts.matches` 由清单声明，**不额外申请页面访问权限**，也不需要 `scripting`
-（不在运行时动态注入）。AI 接口地址不可配，所以 `host_permissions` 里只有它一个；
-GitHub 的两个域名是**可选**权限——不开备份的人永远用不到。
+`content_scripts.matches` 本来就写着 `<all_urls>`，安装时的「读取和更改您在所有网站上的数据」
+提示**早已存在**；把它同样写进 `host_permissions` 不会新增警告，只是让运行时注入成为可能。
+因为已有 `<all_urls>`，GitHub 那两个域名不再需要 `optional_host_permissions`——
+列出来只会让人以为两者有区别。
+
+**权限不等于行为**：不开同步、不用 AI 时扩展仍然不产生任何对外请求；所有页面数据只写
+`chrome.storage.local`。
 
 加权限要三处同步：清单、本文这张表、`tools/verify-build.mjs` 的期望集。
 

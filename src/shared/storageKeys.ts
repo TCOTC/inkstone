@@ -13,6 +13,20 @@ export const PAGE_PREFIX = 'p:'
 /** 库级信息的键前缀（`m:` + 名字），只放一次性事件的时间戳。 */
 export const META_PREFIX = 'm:'
 
+/**
+ * 上一次重注入用到的内容脚本构建指纹。
+ *
+ * **必须放 `chrome.storage.session`，不能放 `local`**。两者的失效时机正好卡在我们要区分的事件上：
+ *
+ * - worker 因空闲被回收（30 秒无事件）：**不清空** → 同一个构建不会重复注入；
+ * - 扩展被 reload / 更新：`SessionStorageManager::OnExtensionUnloaded` 会 `Clear()`，
+ *   **session 清空** → 记账归零，于是重新注入。
+ *
+ * 用 `local` 记的话，「点刷新扩展但没重新 build」与「worker 闲置重启」指纹相同，
+ * 前者明明需要重注入却会被跳过 —— 那正是「刷新后标签页工具条只剩刷新按钮」的成因。
+ */
+export const BUILD_MARK_KEY = 'm:build'
+
 /** 页级写锁的键前缀。锁住在 storage 里，才能被别的标签页看到。 */
 export const LOCK_PREFIX = 'lock:'
 

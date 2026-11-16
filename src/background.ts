@@ -30,7 +30,7 @@ import {buildMessages} from './shared/prompt'
 import {LIBRARY_HASH} from './shared/route'
 import {BACKUP_ALARM, runScheduledBackup, scheduleAfterWrite, syncBackupAlarm} from './shared/githubService'
 import {loadSettings, effectivePrompt, effectiveSystem} from './shared/settings'
-import {AI_KEY_STORAGE, AI_WRAP_STORAGE, PAGE_PREFIX, SETTINGS_KEY} from './shared/storageKeys'
+import {AI_KEY_STORAGE, AI_WRAP_STORAGE, BUILD_MARK_KEY, PAGE_PREFIX, SETTINGS_KEY} from './shared/storageKeys'
 import {
   mergeRemoteKeys,
   pullAiKey,
@@ -208,8 +208,8 @@ function installMenus(): void {
  * 注入的脚本属于**当前**这个扩展实例，`chrome` 是活的，页面也还在原地——
  * 用户既不用刷新页面，也不用重做那次点击。
  *
- * 菜单项是浏览器 UI，所以脱钩的页面上它照常出现；这正是必须兜住这条路径的原因。
- * `activeTab` 由「选中上下文菜单项」授予（官方列出的授予方式之一），所以不需要 `<all_urls>`。
+ * 正常情况下不会走到注入：`ensureContentScriptsCurrent()` 已经在更新后把所有标签页换成了
+ * 新脚本。留这条兜底是因为它更便宜也更可靠（不依赖重注入是否成功）。
  */
 async function copyTitleLink(
   tabId: number | undefined,
@@ -281,6 +281,126 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 function installShell(): void {
   installMenus()
   applyBadgeStyle()
+  // 同一个理由：更新后要让已经打开的标签页也用上新脚本，而 `onInstalled` 不一定触发。
+  void ensureContentScriptsCurrent()
+}
+
+/** 清单里声明的 content script 产物路径（构建会重排路径，只能运行时读）。 */
+function contentScriptFiles(): readonly string[] {
+  return chrome.runtime.getManifest().content_scripts?.[0]?.js ?? []
+}
+
+/**
+ * 内容脚本的**构建指纹**：按产物内容算哈希，所以只要重新 build 就会变。
+ *
+ * 用它而不是版本号：开发版每次 rebuild 版本号都不动，而「换了新构建」正是需要重注入的时刻。
+ * 只取前 8 字节——够区分不同构建，又不至于在日志里占地方。
+ */
+async function contentScriptBuildId(files: readonly string[]): Promise<string> {
+  try {
+    const parts = await Promise.all(
+      files.map(async (file) => new Uint8Array(await (await fetch(chrome.runtime.getURL(file))).arrayBuffer()))
+    )
+    const merged = new Uint8Array(parts.reduce((total, part) => total + part.byteLength, 0))
+    let offset = 0
+    for (const part of parts) {
+      merged.set(part, offset)
+      offset += part.byteLength
+    }
+    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', merged))
+    return Array.from(digest.slice(0, 8), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  } catch {
+    return ''
+  }
+}
+
+/** 能注入的页面：普通网页与本地文件。扩展页与 `chrome://` 永远不行。 */
+const INJECTABLE_URL = /^(https?|file):/i
+
+/**
+ * 这枚标签页现在有没有活着的文档可以注入。
+ *
+ * `discarded`（被内存压力回收）与 `status === 'unloaded'`（冻结）的标签页**没有渲染进程**，
+ * 注入必然失败。不需要为它们做任何补偿：用户点回去时 Chrome 会从磁盘重新加载整页，
+ * 那时清单声明的 content script 会被正常注入，拿到的就是当前构建。
+ */
+function hasLiveDocument(tab: chrome.tabs.Tab): boolean {
+  if (tab.discarded === true) return false
+  return tab.status !== 'unloaded'
+}
+
+/**
+ * 往**所有已经打开的**标签页重新注入一遍内容脚本。
+ *
+ * 读 `tab.url` 需要 `host_permissions` 里的 `<all_urls>`（不需要 `tabs` 权限）。
+ * 单个标签页失败就跳过：页面可能正在导航、或是 `file://` 未开文件访问——
+ * 那些页面刷新后照样会由清单正常注入。
+ */
+async function reinjectAllTabs(files: readonly string[]): Promise<void> {
+  if (files.length === 0) return
+  let tabs: chrome.tabs.Tab[]
+  try {
+    tabs = await chrome.tabs.query({})
+  } catch {
+    return
+  }
+  await Promise.all(
+    tabs.map(async (tab) => {
+      const tabId = tab.id
+      if (tabId === undefined || tabId < 0) return
+      if (!INJECTABLE_URL.test(tab.url ?? '')) return
+      if (!hasLiveDocument(tab)) return
+      try {
+        await chrome.scripting.executeScript({target: {tabId}, files: [...files]})
+      } catch {
+        // 跳过。内容脚本自己会在下一个构建变化时再被注入。
+      }
+    })
+  )
+}
+
+/** 同一轮里 `installShell()` 可能被调多次（顶层 / onInstalled / onStartup），只在跑一次。 */
+let reinjectInFlight: Promise<void> | null = null
+
+/**
+ * 让已经打开的标签页也用上当前构建。
+ *
+ * 旧标签页里那条 content script 在扩展更新后已经脱钩（`chrome.*` 全失效），但它**不会
+ * 被卸载**，所以只能「注入新实例 + 新实例把旧实例拆掉」（见 `content/index.ts` 的
+ * `INSTANCE_KEY`）。
+ *
+ * 浏览器重启时 session 也是空的，于是会把所有活着的标签页再注入一遍。这次多余注入无害
+ * （新实例拆掉刚加载的同构建实例，重画一次划线），而恢复会话时大多数标签页还没加载完，
+ * 本来就会被 `hasLiveDocument()` 跳过。
+ */
+async function ensureContentScriptsCurrent(): Promise<void> {
+  reinjectInFlight ??= reinjectOnce().finally(() => {
+    reinjectInFlight = null
+  })
+  await reinjectInFlight
+}
+
+async function reinjectOnce(): Promise<void> {
+  const files = contentScriptFiles()
+  const id = await contentScriptBuildId(files)
+  if (id === '') return
+  let known: unknown
+  try {
+    // 记账在 `session`：worker 闲置重启时保留（不重复注入），扩展 reload 时被 Chromium
+    // 清空（`SessionStorageManager::OnExtensionUnloaded`）→ 恰好覆盖「刷新扩展但没重新
+    // build」这个最常碰到的情况。详见 `storageKeys.ts` 的 `BUILD_MARK_KEY`。
+    known = (await chrome.storage.session.get(BUILD_MARK_KEY))[BUILD_MARK_KEY]
+  } catch {
+    return
+  }
+  if (known === id) return
+  await reinjectAllTabs(files)
+  // **后写**：注入中途失败（页面正在导航）就不会记上，下次 worker 启动会重试。
+  try {
+    await chrome.storage.session.set({[BUILD_MARK_KEY]: id})
+  } catch {
+    // 记账失败只是下次多注入一轮，不值得打断。
+  }
 }
 
 // 安装 / 更新时先清干净：上一次构建若留下条目，标题或顺序会与代码不一致。

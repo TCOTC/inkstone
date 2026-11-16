@@ -22,30 +22,25 @@ const DIST = resolve(ROOT, 'dist/chrome')
  * 让右键菜单触发的复制能在**没有页面手势**的情况下写剪贴板（`document.execCommand('copy')`
  * 在 content script 里需要它）；装它同样不弹权限提示。
  *
- * `scripting` + `activeTab` 只服务一条路径：扩展更新后旧标签页的 content script 已脱钩，
- * 右键菜单还在但没有人接，于是 `executeScript` 注入两个自包含函数当场做完复制。
- * `activeTab` 由「选中上下文菜单项」授予（官方列出的授予方式），**不需要** `<all_urls>`；
- * 两者都不产生安装时的权限警告。
+ * `scripting` 服务两件事：扩展更新后往**已经打开的**标签页重注入内容脚本（让用户不必逐页
+ * 刷新），以及旧页面收不到消息时注入两个自包含函数把复制做完。
  */
-const EXPECTED_PERMISSIONS = ['storage', 'contextMenus', 'alarms', 'clipboardWrite', 'scripting', 'activeTab']
+const EXPECTED_PERMISSIONS = ['storage', 'contextMenus', 'alarms', 'clipboardWrite', 'scripting']
 
 /**
- * 期望的 host 权限，**只有 AI 接口这一个**。
+ * 期望的 host 权限：**全部站点**。
  *
- * 划词翻译/解释的请求从 service worker 发出；扩展 origin 的 fetch 要靠 host 权限
- * 才能绕过 CORS（页面源的 content script 永远受 CORS 约束）。页面注入仍然由
- * `content_scripts.matches` 声明，这里**不能**出现 `<all_urls>`。
- */
-const EXPECTED_HOST_PERMISSIONS = ['https://api.deepseek.com/*']
-
-/**
- * 可选的 host 权限：GitHub 备份。
+ * 三条用途，缺一条都不成立：
+ * - 重注入：`scripting.executeScript` 对每个标签页都需要该页的 host 权限（`activeTab`
+ *   只在用户点击那一刻有效，无法覆盖「更新时把所有已开标签页都换一遍」）。
+ * - 读 `tab.url` 判断该页能不能注入（不需要 `tabs` 权限）。
+ * - AI 请求从 service worker 发出，扩展 origin 的 fetch 靠 host 权限绕过 CORS。
  *
- * 用 `optional_host_permissions` 而不是写进 `host_permissions`：绝大多数人不开备份，
- * 不该在安装时被吓一跳。点「连接 GitHub」时才 `permissions.request` —— 那次点击就是
- * 需要的手势。
+ * 代价是安装时提示「读取和更改您在所有网站上的数据」——而 `content_scripts.matches`
+ * 里本来就写着 `<all_urls>`，这条提示早已存在。**权限不等于行为**：不开同步、不用 AI 时
+ * 扩展仍然不产生任何对外请求。
  */
-const EXPECTED_OPTIONAL_HOST_PERMISSIONS = ['https://api.github.com/*', 'https://github.com/*']
+const EXPECTED_HOST_PERMISSIONS = ['<all_urls>']
 
 /** 清单里必须指向这些文件的入口。 */
 const EXPECTED_ENTRIES = {
@@ -98,20 +93,16 @@ check(!('browser_specific_settings' in manifest), '清单里残留 browser_speci
 check(!('browser_action' in manifest), '清单里残留 browser_action')
 check(!('side_panel' in manifest), '清单里残留 side_panel（管理页是独立标签页）')
 
-// 页面注入完全由 content_scripts.matches 声明；host 权限只留给 AI 接口这一个具体域名。
+// host 权限覆盖全部站点，见 EXPECTED_HOST_PERMISSIONS 的说明。
 const hosts = [...(manifest.host_permissions ?? [])].sort()
 check(
   JSON.stringify(hosts) === JSON.stringify([...EXPECTED_HOST_PERMISSIONS].sort()),
   `host_permissions 与预期不一致\n    预期 ${EXPECTED_HOST_PERMISSIONS.join(', ')}\n    实际 ${hosts.join(', ') || '(空)'}`
 )
+// 已有 `<all_urls>` 时再列具体域名只会让人以为两者有区别；GitHub 备份也因此不再需要 optional。
 check(
-  !hosts.includes('<all_urls>'),
-  'host_permissions 里出现了 <all_urls>：请求只需要发往 AI 接口'
-)
-const optionalHosts = [...(manifest.optional_host_permissions ?? [])].sort()
-check(
-  JSON.stringify(optionalHosts) === JSON.stringify([...EXPECTED_OPTIONAL_HOST_PERMISSIONS].sort()),
-  `optional_host_permissions 与预期不一致\n    预期 ${EXPECTED_OPTIONAL_HOST_PERMISSIONS.join(', ')}\n    实际 ${optionalHosts.join(', ') || '(空)'}`
+  !('optional_host_permissions' in manifest),
+  '出现了 optional_host_permissions：host 已是 <all_urls>，无需再申请可选域名'
 )
 check(!('optional_permissions' in manifest), '出现了 optional_permissions，本项目用不到')
 
@@ -121,12 +112,8 @@ check(
   JSON.stringify(actual) === JSON.stringify(wanted),
   `权限与预期不一致\n    预期 ${wanted.join(', ')}\n    实际 ${actual.join(', ')}`
 )
-// `scripting` 只能配合 `activeTab` 用，而且只允许在用户点击的那一刻注入（扩展更新后的复制兜底）。
-// 两者必须同时出现：缺 `activeTab` 就等于「靠 host 权限注入」，那会把注入范围扩大到全站。
-check(
-  actual.includes('scripting') === actual.includes('activeTab'),
-  'scripting 与 activeTab 必须成对出现（前者只用于点击那一刻的 executeScript）'
-)
+// 重注入与复制兜底都要 `executeScript`；没有 `scripting` 就等于这两条路悄悄失效。
+check(actual.includes('scripting'), '缺少 scripting：更新后无法往已打开标签页重注入')
 
 // content script 必须覆盖所有站点，否则「打开一个划过的页面」会因为没注入而静默失效。
 const matches = manifest.content_scripts?.[0]?.matches ?? []
@@ -176,7 +163,6 @@ check(
 
 console.log(`  ${manifest.name} ${manifest.version} — 权限 ${actual.join(', ')}`)
 console.log(`  host 权限 ${hosts.join(', ') || '(无)'}`)
-console.log(`  可选 host 权限：${EXPECTED_OPTIONAL_HOST_PERMISSIONS.join(', ')}（GitHub 备份，点连接时才申请）`)
 console.log(`  minimum_chrome_version ${manifest.minimum_chrome_version}`)
 
 // 扩展 ID 决定 storage 分区：ID 变了，磁盘上的数据还在但没有任何入口能读到。
@@ -193,4 +179,4 @@ if (failures.length > 0) {
   process.exit(1)
 }
 
-console.log('\n自检通过：产物齐全、host 权限只有 AI 接口、无 Firefox 残留、权限集与 docs/design.md 一致。')
+console.log('\n自检通过：产物齐全、host 权限与预期一致、无 Firefox 残留、权限集与 docs/design.md 一致。')

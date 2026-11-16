@@ -113,9 +113,11 @@ docs/
 
 ## 工程约定
 
-1. **权限最小化**：`storage` + `contextMenus`，host 权限只有 AI 接口一个域名。加权限 → 同步
+1. **权限最小化**：`storage` + `contextMenus` + `alarms` + `clipboardWrite` + `scripting`，
+   host 权限是 `<all_urls>`——它只为「更新后把已打开标签页换成新脚本」存在
+   （`activeTab` 只在用户点击那一刻有效，覆盖不了这种批量重注入）。加权限 → 同步
    `docs/design.md` 的权限表 + `tools/verify-build.mjs`。页面注入由 `content_scripts.matches` 声明，
-   不需要 `scripting`。
+   重注入与复制兜底才用 `scripting`。
 2. **只用 `chrome.*`**：不引 `browser.*`、不引 polyfill。
 3. **同一件事只写一处**：颜色在 `shared/colors.ts`；画笔样式在 `shared/styles.ts`；
    URL 归一化在 `shared/url.ts`；存储键名与备份格式在 `shared/rowCodec.ts`；

@@ -38,7 +38,25 @@ import {Toast} from './toast'
 import {Toolbar} from './toolbar'
 import {ensureSelectable, resetSelectableProbe} from './userSelect'
 
-const LOADED_FLAG = '__inkstoneLoaded'
+/**
+ * 实例登记处。扩展更新后 `chrome.scripting.executeScript` 会把新脚本注入到**同一个**
+ * isolated world（与清单声明的 content script 同一个 global），而 Chrome **不会卸载**旧实例：
+ * 它的 `document` 监听、`MutationObserver`、Shadow 宿主全在，只是 `chrome.*` 已失效。
+ *
+ * 于是约定：每个实例启动时把自己登记在这里，并给出一个能把自己拆干净的 `teardown`。
+ * 新实例进来先把旧实例拆掉再接管，标签页就不必刷新。
+ */
+const INSTANCE_KEY = '__inkstoneInstance'
+interface ContentInstance {
+  alive: boolean
+  teardown: () => void
+}
+
+function currentInstance(): ContentInstance | undefined {
+  const slot = (globalThis as Record<string, unknown>)[INSTANCE_KEY]
+  return slot && typeof slot === 'object' ? (slot as ContentInstance) : undefined
+}
+
 /** 有未定位的划线时，DOM 变动触发的重试最小间隔（正文常是后加载的）。 */
 const UNRESOLVED_RETRY_MS = 5000
 /** 弹划词工具条的延时。 */
@@ -56,17 +74,16 @@ const ANCHOR_NOTICE: Record<AnchorFailure, string> = {
   AMBIGUOUS: '所选文字在页面中多处出现，无法区分上下文，未保存'
 }
 
-function isLoaded(): boolean {
-  return Boolean((globalThis as Record<string, unknown>)[LOADED_FLAG])
-}
-
 function prefersDark(): boolean {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false
 }
 
-/** 订阅系统深浅色变化（主题变化时重画一次）。 */
-function watchColorScheme(onChange: () => void): void {
-  window.matchMedia?.('(prefers-color-scheme: dark)').addEventListener?.('change', onChange)
+/** 订阅系统深浅色变化（主题变化时重画一次）。返回取消订阅函数。 */
+function watchColorScheme(onChange: () => void): () => void {
+  const query = window.matchMedia?.('(prefers-color-scheme: dark)')
+  if (!query?.addEventListener) return () => {}
+  query.addEventListener('change', onChange)
+  return () => query.removeEventListener('change', onChange)
 }
 
 /**
@@ -82,6 +99,19 @@ const OVERLAY_HOSTS = new Set([
   'inkstone-toast'
 ])
 
+/**
+ * 接管时要清掉的宿主标签。比 `OVERLAY_HOSTS` 多一个 `inkstone-spotlight`——
+ * 那个盒子 `pointer-events: none`，不参与事件判定，所以不在上面那个集合里，
+ * 但它同样必须拆掉，否则旧实例描的框会一直挂在页面上。
+ */
+const OVERLAY_TAGS = [...OVERLAY_HOSTS, 'inkstone-spotlight']
+
+function removeOverlayHosts(): void {
+  for (const tag of OVERLAY_TAGS) {
+    for (const node of document.querySelectorAll(tag)) node.remove()
+  }
+}
+
 function isOverlayNode(node: EventTarget | null): boolean {
   return node instanceof Element && OVERLAY_HOSTS.has(node.localName)
 }
@@ -89,6 +119,9 @@ function isOverlayNode(node: EventTarget | null): boolean {
 function isOurMutation(target: Node): boolean {
   return isOverlayNode(target instanceof Element ? target : target.parentElement)
 }
+
+/** 空索引表：`paint()` 在没有划线时用它，避免顺手把整页索引建出来。 */
+const NO_NODES: readonly Text[] = []
 
 /** 只要求「非空」；真正不建划线是锚定自己的规则（`ANCHOR_NOTICE`）。 */
 function currentSelection(): Range | null {
@@ -99,16 +132,33 @@ function currentSelection(): Range | null {
 }
 
 async function boot(): Promise<void> {
-  if (isLoaded()) return
-  ;(globalThis as Record<string, unknown>)[LOADED_FLAG] = true
+  // 扩展更新后 `executeScript` 会把新实例注入到**同一个** isolated world，而 Chrome 不会
+  // 卸载旧实例（它的监听与 Shadow 宿主都还在，只是 `chrome.*` 已失效）。先让旧实例自己拆，
+  // 老版本没有这个能力就退化为下面按标签名清 DOM——两者都做，代价接近零。
+  try {
+    currentInstance()?.teardown()
+  } catch {
+    // 旧实例拆到一半抛错不影响接管。
+  }
+  removeOverlayHosts()
 
   const index = new PageTextIndex()
   const highlighter = new Highlighter()
+  // 上一个实例若不会拆（老版本），它的注册名还挂在 `CSS.highlights` 上，这里一并清掉。
+  highlighter.clear()
   const toolbar = new Toolbar()
   const markers = new Markers()
   const panel = new PagePanel()
   const spotlight = new Spotlight()
   const toast = new Toast()
+
+  /** 拆解时要撤掉的东西（监听、定时器、观察者）。`teardown()` 逐个执行后清空。 */
+  const disposers: Array<() => void> = []
+  function disposeLater(off: () => void): void {
+    disposers.push(off)
+  }
+  /** 已拆解：在途的异步回来时靠它早退（同一个 world 的 `CSS.highlights` 是共享的）。 */
+  let disposed = false
 
   let settings: Settings = await loadSettings()
   /** 存了 API Key 才有翻译/解释入口。模型与地址都有默认值，不需要用户配。 */
@@ -235,6 +285,7 @@ async function boot(): Promise<void> {
     aiCards.closeUnpinned()
   }
   document.addEventListener('mousedown', onDocumentMouseDown, true)
+  disposeLater(() => document.removeEventListener('mousedown', onDocumentMouseDown, true))
 
   markers.bind({onPick: (id) => goTo(id)})
   panel.bind({onPick: (id) => goTo(id)})
@@ -292,12 +343,9 @@ async function boot(): Promise<void> {
     return found ? found.highlight.text.trim() : ''
   }
 
-  /** 空索引表：`paint()` 在没有划线时用它，避免顺手把整页索引建出来。 */
-  const NO_NODES: readonly Text[] = []
-
   /** 按当前设置重画。不重定位——主题/画笔变化只影响样式。 */
   function paint(nodes?: readonly Text[]): void {
-    if (!settings.highlightEnabled) return
+    if (disposed || !settings.highlightEnabled) return
     // 没有划线时不去建索引：那等于把整页文本节点遍历一遍，却什么都不产出。
     const textNodes = nodes ?? (items.length === 0 ? NO_NODES : index.indexData().nodes)
     highlighter.render(items, textNodes, {
@@ -312,7 +360,7 @@ async function boot(): Promise<void> {
    * 站点无关的 DOM 变动（广告、评论区、懒加载）不必全量重建索引。
    */
   function render(reason: 'load' | 'change' = 'load'): void {
-    if (!settings.highlightEnabled) return
+    if (disposed || !settings.highlightEnabled) return
     if (reason === 'change' && !highlighter.isStale()) {
       if (unresolvedCount === 0) return
       const now = performance.now()
@@ -359,6 +407,8 @@ async function boot(): Promise<void> {
   async function loadPage(): Promise<void> {
     if (!checkAlive()) return
     page = await getPageByUrl(location.href)
+    // 读取期间被新实例接管了：不要拿旧数据去画（同一个 world 的注册表是共享的）。
+    if (disposed) return
     render()
     // 扩展被关掉时 `render()` 直接返回（不会走到 `syncNavigators()`），这里补一次：
     // 这种情况得把角标擦掉，否则会挂着上一次的数字。
@@ -487,7 +537,8 @@ async function boot(): Promise<void> {
 
   // SPA 换页用 hashless URL 判断。顺便每秒问一句「扩展还活着吗」：更新 / 停用后旧脚本
   // 收不到任何通知，只能自己发现。只读本地属性，比开长连接便宜。
-  window.setInterval(() => {
+  const urlWatcher = window.setInterval(() => {
+    if (disposed) return
     if (!isExtensionAlive()) {
       enterStale()
       return
@@ -501,14 +552,16 @@ async function boot(): Promise<void> {
     hideFloats(true)
     void loadPage()
   }, 1000)
+  disposeLater(() => window.clearInterval(urlWatcher))
 
   // 合并成一次空闲任务，连续变动不占满主线程；要不要重算由 `render('change')` 里的
   // `isStale()` 决定。
   let scheduled = 0
   const scheduleRender = (): void => {
-    if (scheduled) return
+    if (disposed || scheduled) return
     const run = (): void => {
       scheduled = 0
+      if (disposed) return
       render('change')
     }
     scheduled =
@@ -539,6 +592,7 @@ async function boot(): Promise<void> {
     }
   }
   chrome.runtime.onMessage.addListener(onContentMessage)
+  disposeLater(() => chrome.runtime.onMessage.removeListener(onContentMessage))
 
   /**
    * 复制不需要扩展是启用的：它不碰划线数据，也不写存储。
@@ -574,6 +628,7 @@ async function boot(): Promise<void> {
     reportCount()
   }
   chrome.storage.onChanged.addListener(onSettingsChanged)
+  disposeLater(() => chrome.storage.onChanged.removeListener(onSettingsChanged))
 
   /** 设置页填了 / 删了 API Key → 立刻更新「能不能用 AI」，不必刷新页面。 */
   function onAiKeyChanged(
@@ -584,6 +639,7 @@ async function boot(): Promise<void> {
     void refreshAiReady()
   }
   chrome.storage.onChanged.addListener(onAiKeyChanged)
+  disposeLater(() => chrome.storage.onChanged.removeListener(onAiKeyChanged))
 
   // 别的标签页改了本页 → 重读重画（只重画会把已被删掉的线继续画着）。
   // 判定「是不是本页」不能只看键：页面可能是靠回退匹配找到的，那时它存在另一个键上，
@@ -620,13 +676,21 @@ async function boot(): Promise<void> {
     }
   }
   chrome.storage.onChanged.addListener(onPagesChanged)
+  disposeLater(() => chrome.storage.onChanged.removeListener(onPagesChanged))
 
-  watchColorScheme(() => paint())
+  disposeLater(watchColorScheme(() => paint()))
 
   document.addEventListener('mouseup', onMouseUp, true)
   document.addEventListener('click', onClick, true)
   document.addEventListener('keydown', onKeyDown, true)
   document.addEventListener('mousemove', onMouseMove, {passive: true})
+  disposeLater(() => {
+    document.removeEventListener('mouseup', onMouseUp, true)
+    document.removeEventListener('click', onClick, true)
+    document.removeEventListener('keydown', onKeyDown, true)
+    // `removeEventListener` 只认 capture，不认 `passive`。
+    document.removeEventListener('mousemove', onMouseMove as unknown as EventListener)
+  })
   // 不监听 scroll / resize：浮层用页面坐标绝对定位，滚动时随内容走。
   // （试过 position:fixed + 隐藏，结果是浮层「不跟着文字走」，不能回到那条路。）
 
@@ -644,6 +708,7 @@ async function boot(): Promise<void> {
 
   if (document.body) {
     observer.observe(document.body, {childList: true, subtree: true, characterData: true})
+    disposeLater(() => observer.disconnect())
   }
 
   // 被站点禁用选择（典型：微信公众号）时先解锁，否则后面的一切交互都无从谈起。
@@ -670,6 +735,7 @@ async function boot(): Promise<void> {
   }
 
   window.addEventListener('load', relayoutMarkers)
+  disposeLater(() => window.removeEventListener('load', relayoutMarkers))
   void document.fonts.ready.then(relayoutMarkers)
   if (typeof ResizeObserver === 'function' && document.body) {
     let resyncTimer = 0
@@ -681,7 +747,36 @@ async function boot(): Promise<void> {
       }, 200)
     })
     resizeObserver.observe(document.body)
+    disposeLater(() => {
+      resizeObserver.disconnect()
+      window.clearTimeout(resyncTimer)
+    })
   }
+
+  /**
+   * 把自己拆干净：撤监听 / 定时器 / 观察者，断开 AI 长连接，清掉共享的高亮注册表与宿主。
+   *
+   * 顺序有讲究：**先撤监听**（否则拆除过程中页面事件还会回来写新实例的状态），
+   * 再停 rAF / 断开端口，最后清注册表与宿地。
+   */
+  function teardown(): void {
+    if (disposed) return
+    disposed = true
+    for (const off of disposers.splice(0)) {
+      try {
+        off()
+      } catch {
+        // 单个 disposer 出错不影响其余部分。
+      }
+    }
+    spotlight.stop()
+    aiCards.hideAll()
+    highlighter.clear()
+    removeOverlayHosts()
+    ;(globalThis as Record<string, unknown>)[INSTANCE_KEY] = undefined
+  }
+
+  ;(globalThis as Record<string, unknown>)[INSTANCE_KEY] = {alive: true, teardown}
 }
 
 void boot()

@@ -11,9 +11,8 @@
     "48": "images/icon-48.png",
     "128": "images/icon-128.png"
   },
-  "permissions": ["storage", "contextMenus", "alarms", "clipboardWrite", "scripting", "activeTab"],
-  "host_permissions": ["https://api.deepseek.com/*"],
-  "optional_host_permissions": ["https://github.com/*", "https://api.github.com/*"],
+  "permissions": ["storage", "contextMenus", "alarms", "clipboardWrite", "scripting"],
+  "host_permissions": ["<all_urls>"],
   "action": {
     "default_icon": {
       "16": "images/icon-16.png",
