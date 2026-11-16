@@ -30,6 +30,7 @@ import {
 } from '../shared/githubService'
 import {clearRemote, pushSettings, syncNow, syncState, type SyncState} from '../shared/sync'
 import {BACKUP_INTERVALS, BACKUP_INTERVAL_LABELS} from '../shared/types'
+import {openTabAfterCurrent} from './openTab'
 import {refreshSettings, settings, updateSettings} from './settingsStore'
 
 const stat = ref<DatabaseStats | null>(null)
@@ -297,14 +298,14 @@ async function copyDeviceCode(): Promise<void> {
 /** 打开 GitHub 的输码页。用 `tabs.create` 而不是 `<a href>`：扩展页里点链接会留在同一标签。 */
 function openVerifyPage(): void {
   if (!ghDevice.value) return
-  void chrome.tabs.create({url: ghDevice.value.verificationUri})
+  void openTabAfterCurrent(ghDevice.value.verificationUri)
 }
 
 /** 在新标签里打开备份仓库（看提交历史、下载某份文件都靠它）。 */
 function openRepoPage(): void {
   const parsed = parseRepo(ghRepo.value)
   if (!parsed) return
-  void chrome.tabs.create({url: `https://github.com/${parsed.owner}/${parsed.repo}`})
+  void openTabAfterCurrent(`https://github.com/${parsed.owner}/${parsed.repo}`)
 }
 
 async function refreshSync(): Promise<void> {

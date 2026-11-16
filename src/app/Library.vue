@@ -2,7 +2,7 @@
   「我的划线」：左列所有页面，右列该页的划线；左列顶部还有「未定位」入口。
 
   与「偏好设置」共用 `options/index.html`，只靠 hash 区分视图（分发在 `pages/app.ts`）。
-  「打开网页」一律走 `chrome.tabs.create` + `#inkstone-hl=<id>`，不做 iframe 内嵌：
+  「打开网页」一律走 `openTabAfterCurrent` + `#inkstone-hl=<id>`，不做 iframe 内嵌：
   目标站点普遍带 `X-Frame-Options` / `frame-ancestors`，内嵌必然白屏。
 
   未定位清单放在这里而不是设置页：它是数据视图，不是一项设置。
@@ -17,6 +17,7 @@ import {readSelectedPage, selectedPageHash, settingsGroupHash, withHighlightAnch
 import {type HighlightRecord, type PageRecord} from '../shared/types'
 import {clearUnresolved, listUnresolved, type UnresolvedPage} from '../shared/unresolved'
 import {hostOf} from '../shared/url'
+import {openTabAfterCurrent} from './openTab'
 
 const pages = shallowRef<PageRecord[]>([])
 const query = ref('')
@@ -107,11 +108,11 @@ async function onClearUnresolved(): Promise<void> {
 }
 
 function openPage(url: string): void {
-  void chrome.tabs.create({url})
+  void openTabAfterCurrent(url)
 }
 
 function jump(page: PageRecord, highlight: HighlightRecord): void {
-  void chrome.tabs.create({url: withHighlightAnchor(page.url, highlight.id)})
+  void openTabAfterCurrent(withHighlightAnchor(page.url, highlight.id))
 }
 
 watch(visible, ensureSelection)
