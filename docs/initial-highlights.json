@@ -1,10 +1,9 @@
 {
   "format": "inkstone-backup",
-  "version": 1,
   "exportedAt": 1794582817715,
   "settings": {
     "penStyle": 1,
-    "enabled": true
+    "highlightEnabled": true
   },
   "pages": [
     {

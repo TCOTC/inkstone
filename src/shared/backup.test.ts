@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import {readFileSync} from 'node:fs'
 import test from 'node:test'
+import {fileURLToPath} from 'node:url'
 import {BACKUP_FORMAT, backupFileName, parseBackup} from './backup'
 import {DEFAULT_AI_LANGUAGE} from './prompt'
 import {encodePage} from './rowCodec'
@@ -87,4 +89,29 @@ test('parseBackup：设置缺失或非法时按默认值补齐', () => {
 test('backupFileName：带日期、可排序', () => {
   assert.equal(backupFileName(new Date(2026, 10, 13)), 'inkstone-backup-20261113.json')
   assert.equal(backupFileName(new Date(2026, 0, 5)), 'inkstone-backup-20260105.json')
+})
+
+/**
+ * `docs/initial-highlights.json` 是验收基准（design.md §10），也是仓库里唯一一份真实备份。
+ *
+ * 它不参与构建，所以字段一改就会悄悄失效——这个用例把它当成「用户手里的一份旧文件」来读，
+ * 一旦格式漂移（多写一个已废弃的 `version`、留着改名前的设置字段）就在这里红掉。
+ */
+test('仓库里的验收基准备份仍能被当前解析器读完', () => {
+  const path = fileURLToPath(new URL('../../docs/initial-highlights.json', import.meta.url))
+  const result = parseBackup(JSON.parse(readFileSync(path, 'utf8')))
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+
+  assert.equal(result.pages.length, 18)
+  assert.equal(
+    result.pages.reduce((sum, page_) => sum + page_.highlights.length, 0),
+    117
+  )
+
+  // 设置必须是**当前**字段名：旧字段名会被当成未知字段收进 `extra`，从此一直跟着同步。
+  assert.ok(result.settings)
+  assert.equal(result.settings.extra, undefined)
+  assert.equal(result.settings.penStyle, 1)
+  assert.equal(result.settings.highlightEnabled, true)
 })
