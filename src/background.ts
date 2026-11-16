@@ -15,6 +15,9 @@ import {
 import {loadAiKey} from './shared/aiKey'
 import {badgeText} from './shared/badge'
 import {BADGE_BACKGROUND, BADGE_TEXT} from './shared/colors'
+import {formatCopyLink, linkFrom, preferSelection, titleFrom, type CopyLinkStyle} from './shared/copyLink'
+import {readPageCandidatesInPage} from './content/pageMeta'
+import {writeClipboardInPage} from './content/injectedCopy'
 import {
   AI_PORT,
   type AiClientMessage,
@@ -161,18 +164,111 @@ chrome.runtime.onMessage.addListener((message: ContentMessage, sender, sendRespo
 /** 右键点工具栏图标时出现的两个入口。 */
 const MENU_LIBRARY = 'inkstone-library'
 const MENU_SETTINGS = 'inkstone-settings'
+/** 页面右键菜单：空白处右键复制网页标题，选中文字右键复制选中的那段。 */
+const MENU_COPY_TEXT = 'inkstone-copy-title-link'
+const MENU_COPY_MD = 'inkstone-copy-title-link-md'
+const MENU_COPY_SELECTION_TEXT = 'inkstone-copy-selection-link'
+const MENU_COPY_SELECTION_MD = 'inkstone-copy-selection-link-md'
 
 /**
  * `contextMenus.create` 对已存在的 id 是更新，所以幂等。worker 冷启动也要跑：
  * 开发模式「刷新扩展」不一定触发 `onInstalled`，只在安装事件里建会拿不到菜单。
+ *
+ * 两种上下文**各用一份菜单项**而不是共用：标题说「复制标题」而实际复制的是选区，
+ * 是明确的文案错误。`page` 与 `selection` 也不会同时命中，所以同一时刻只有一对可见。
  */
 function installMenus(): void {
   const done = (): void => void chrome.runtime.lastError
+  chrome.contextMenus.create(
+    {id: MENU_COPY_TEXT, title: '复制标题和链接（文本）', contexts: ['page']},
+    done
+  )
+  chrome.contextMenus.create(
+    {id: MENU_COPY_MD, title: '复制标题和链接（Markdown）', contexts: ['page']},
+    done
+  )
+  chrome.contextMenus.create(
+    {id: MENU_COPY_SELECTION_TEXT, title: '复制选中文本和链接', contexts: ['selection']},
+    done
+  )
+  chrome.contextMenus.create(
+    {id: MENU_COPY_SELECTION_MD, title: '复制选中文本和链接（Markdown）', contexts: ['selection']},
+    done
+  )
   chrome.contextMenus.create({id: MENU_LIBRARY, title: '我的划线', contexts: ['action']}, done)
   chrome.contextMenus.create({id: MENU_SETTINGS, title: '偏好设置', contexts: ['action']}, done)
 }
 
+/**
+ * 复制只在页面里做得到（标题、canonical、剪贴板都在 `document` 上）。
+ *
+ * 正常路径发给 content script；**扩展更新后、本页没刷新**时那条旧脚本已脱钩
+ * （`content/extensionAlive.ts`），`sendMessage` 会以「Receiving end does not exist」失败。
+ * 这时改用 `chrome.scripting.executeScript` 注入两个自包含函数当场做完：
+ * 注入的脚本属于**当前**这个扩展实例，`chrome` 是活的，页面也还在原地——
+ * 用户既不用刷新页面，也不用重做那次点击。
+ *
+ * 菜单项是浏览器 UI，所以脱钩的页面上它照常出现；这正是必须兜住这条路径的原因。
+ * `activeTab` 由「选中上下文菜单项」授予（官方列出的授予方式之一），所以不需要 `<all_urls>`。
+ */
+async function copyTitleLink(
+  tabId: number | undefined,
+  style: CopyLinkStyle,
+  selectionText: string | undefined
+): Promise<void> {
+  if (tabId === undefined || tabId < 0) return
+  const selected = selectionText ?? ''
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: 'copy:title-link',
+      style,
+      selectionText: selected
+    } satisfies ContentMessage)
+    return
+  } catch {
+    // 落在下面：本页没有活的 content script。
+  }
+  await injectCopy(tabId, style, selected)
+}
+
+/**
+ * 注入路径。两步而不是一步：读取（自包含）→ 用共享纯函数挑选与拼装 → 写入（自包含）。
+ * 注入的函数不能 import，所以挑选规则不能放进页面，只能留在 background 里复用同一份。
+ */
+async function injectCopy(tabId: number, style: CopyLinkStyle, selected: string): Promise<void> {
+  try {
+    const [read] = await chrome.scripting.executeScript({
+      target: {tabId},
+      func: readPageCandidatesInPage
+    })
+    const candidates = read?.result
+    if (!candidates) return
+    const text = formatCopyLink(preferSelection(selected, titleFrom(candidates)), linkFrom(candidates), style)
+    // 页面里的实时选区在这里拿不到（注入是新的执行环境），这就是 `selectionText` 存在的原因。
+    await chrome.scripting.executeScript({
+      target: {tabId},
+      func: writeClipboardInPage,
+      args: [text, selected.trim() === '' ? '已复制标题和链接' : '已复制选中文本和链接', '复制失败，请重试']
+    })
+  } catch {
+    // `chrome://`、扩展页、未授予 activeTab、`file://` 未开文件访问：都没有可注入的目标。
+  }
+}
+
+/** 菜单项 id → 复制格式；未登记 = 不是复制项。 */
+const COPY_MENU_STYLES: Record<string, CopyLinkStyle> = {
+  [MENU_COPY_TEXT]: 'text',
+  [MENU_COPY_MD]: 'md',
+  [MENU_COPY_SELECTION_TEXT]: 'text',
+  [MENU_COPY_SELECTION_MD]: 'md'
+}
+
 chrome.contextMenus.onClicked.addListener((info, tab) => {
+  const style = COPY_MENU_STYLES[String(info.menuItemId)]
+  if (style !== undefined) {
+    void copyTitleLink(tab?.id, style, info.selectionText)
+    return
+  }
   if (info.menuItemId === MENU_LIBRARY) void focusOrOpen(optionsUrl(LIBRARY_HASH), tab?.id)
   else if (info.menuItemId === MENU_SETTINGS) void focusOrOpen(optionsUrl(), tab?.id)
 })

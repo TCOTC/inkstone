@@ -6,12 +6,21 @@
  * content script 自己调 `shared/db.ts` 就行。这里只放「必须跨上下文」的几件事。
  */
 import type {AiSource, AiUsage} from './ai'
+import type {CopyLinkStyle} from './copyLink'
 import type {AiAction} from './prompt'
 
 /** background → content：工具栏图标左键（面板开合）、右键菜单等。 */
 export type ContentMessage =
   | {type: 'panel:toggle'}
   | {type: 'open-settings'}
+  /**
+   * 右键菜单「复制标题和链接」。标题与 canonical 只有页面里读得到，
+   * 剪贴板也只能在页面上下文写（见 `content/clipboard.ts`）。
+   *
+   * `selectionText` 是菜单带过来的选区（右键落在选中的文字上时才有）：非空就顶替网页标题。
+   * 它可能被 Chrome 截断，所以页面那边还会先读一次实时选区。
+   */
+  | {type: 'copy:title-link'; style: CopyLinkStyle; selectionText?: string}
   /**
    * 「配好 AI 了吗」——只回布尔，**不回密钥**。
    *

@@ -11,7 +11,7 @@
     "48": "images/icon-48.png",
     "128": "images/icon-128.png"
   },
-  "permissions": ["storage", "contextMenus", "alarms"],
+  "permissions": ["storage", "contextMenus", "alarms", "clipboardWrite", "scripting", "activeTab"],
   "host_permissions": ["https://api.deepseek.com/*"],
   "optional_host_permissions": ["https://github.com/*", "https://api.github.com/*"],
   "action": {

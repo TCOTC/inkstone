@@ -4,6 +4,7 @@
  * 存储访问一律走 `shared/db.ts`：storage 对 content script 直接可见，不经 background 转发。
  */
 import {createAnchorFromRange, type AnchorFailure} from '../shared/anchor'
+import {preferSelection, type CopyLinkStyle} from '../shared/copyLink'
 import {addHighlight, deleteHighlight, getPageByUrl} from '../shared/db'
 import {
   type AiReadyReply,
@@ -24,13 +25,16 @@ import {isPageEditable, isEventInEditable, isInEditable} from './editable'
 import {isExtensionAlive} from './extensionAlive'
 import {anchorBox} from './aiCard'
 import {AiCards} from './aiCards'
+import {copyText} from './clipboard'
 import {isBackwardSelection} from './geometry'
 import {Highlighter, type RenderItem} from './highlighter'
 import {buildMarkerEntries} from './markerEntries'
 import {Markers, type MarkerEntry} from './markers'
+import {copyLinkText} from './pageMeta'
 import {PagePanel} from './pagePanel'
 import {collectSelectionContext} from './selectionContext'
 import {Spotlight} from './spotlight'
+import {Toast} from './toast'
 import {Toolbar} from './toolbar'
 import {ensureSelectable, resetSelectableProbe} from './userSelect'
 
@@ -70,7 +74,13 @@ function watchColorScheme(onChange: () => void): void {
  * **必须精确匹配**：`includes()` 是子串匹配，`inkstone-panel` 里的字母 `p` 会把 `<p>`
  * 当成浮层，工具条会全线失效。若将来往宿主直接 `append` 子节点，这里要退回 `closest()`。
  */
-const OVERLAY_HOSTS = new Set(['inkstone-toolbar', 'inkstone-markers', 'inkstone-panel', 'inkstone-ai'])
+const OVERLAY_HOSTS = new Set([
+  'inkstone-toolbar',
+  'inkstone-markers',
+  'inkstone-panel',
+  'inkstone-ai',
+  'inkstone-toast'
+])
 
 function isOverlayNode(node: EventTarget | null): boolean {
   return node instanceof Element && OVERLAY_HOSTS.has(node.localName)
@@ -98,6 +108,7 @@ async function boot(): Promise<void> {
   const markers = new Markers()
   const panel = new PagePanel()
   const spotlight = new Spotlight()
+  const toast = new Toast()
 
   let settings: Settings = await loadSettings()
   /** 存了 API Key 才有翻译/解释入口。模型与地址都有默认值，不需要用户配。 */
@@ -513,13 +524,34 @@ async function boot(): Promise<void> {
   })
 
   // 工具栏图标左键点击 → 在页面右侧展开/收起本页划线列表（background 转发）。
-  function onPanelMessage(message: ContentMessage): void {
-    if (message?.type !== 'panel:toggle') return
-    // 关掉扩展时页面上什么都没画，直接 toggle 会显示「本页没有划线」，容易被当成坏了。
-    if (settings.highlightEnabled) panel.toggle()
-    else panel.notice('扩展已在偏好设置里关闭。')
+  // 右键菜单的「复制标题和链接」也走这条通道（style 由菜单项决定）。
+  function onContentMessage(message: ContentMessage): void {
+    if (message?.type === 'panel:toggle') {
+      // 关掉扩展时页面上什么都没画，直接 toggle 会显示「本页没有划线」，容易被当成坏了。
+      if (settings.highlightEnabled) panel.toggle()
+      else panel.notice('扩展已在偏好设置里关闭。')
+      return
+    }
+    if (message?.type === 'copy:title-link') {
+      // 实时选区优先：菜单带过来的那份可能被 Chrome 截断。两者都取不到时用网页标题。
+      const live = window.getSelection()?.toString() ?? ''
+      void copyTitleLink(message.style, preferSelection(live, message.selectionText ?? ''))
+    }
   }
-  chrome.runtime.onMessage.addListener(onPanelMessage)
+  chrome.runtime.onMessage.addListener(onContentMessage)
+
+  /**
+   * 复制不需要扩展是启用的：它不碰划线数据，也不写存储。
+   * 失败（页面失焦、剪贴板被拒）要说出来，静默比不提供这个功能更让人困惑。
+   */
+  async function copyTitleLink(style: CopyLinkStyle, selected: string): Promise<void> {
+    const ok = await copyText(copyLinkText(style, selected))
+    if (!ok) {
+      toast.show('复制失败，请重试')
+      return
+    }
+    toast.show(selected.trim() === '' ? '已复制标题和链接' : '已复制选中文本和链接')
+  }
 
   /** 关掉时清高亮并擦角标；重新打开要从头渲染（之前可能一次都没定位过）。 */
   function onSettingsChanged(

@@ -22,6 +22,8 @@
 | 查看 / 删除 | 点划线弹出工具条，可删除；原文与时间在本页列表里看 |
 | 翻译 / 解释 | 对选中文字或整条划线发 DeepSeek 请求，流式显示，可按需联网搜索 |
 | 复制 | 复制选中文字或整条划线的原文 |
+| 复制标题和链接 | 页面空白处右键：复制网页标题与链接，文本或 Markdown 两种格式 |
+| 复制选中文本和链接 | 选中文字后右键：以选中的文字代替网页标题，同样两种格式 |
 | 本页列表 | 左键点工具栏图标，右侧滑出本页全部划线，含「未定位」分区 |
 | 右侧标记点 | 页面右缘一列短横线，按位置标出全部划线 |
 | 我的划线 | 跨页浏览、搜索、跳回原网页定位 |
@@ -292,11 +294,20 @@ Chrome 不会把已注入的 content script 从打开的标签页里换掉。更
 端口断开既可能是扩展没了，也可能是 service worker 正常休眠，那条路要重连 + 心跳，
 等于主动把 worker 一直叫醒。
 
+**右键菜单是个例外**：菜单项是浏览器 UI，旧页面上照常出现，但点下去没有接收方
+（`tabs.sendMessage` 报「Receiving end does not exist」），页面自己救不了自己。
+这一条改用 `chrome.scripting.executeScript` 注入两个**自包含**函数当场做完：
+一个读 `document.title` / canonical / og:url，一个写剪贴板并闪一句提示。
+注入的脚本属于当前这个扩展实例，`chrome` 是活的，页面也还在原地——
+所以既不用刷新页面，也不用重做那次点击。`activeTab` 由「选中上下文菜单项」授予，
+因此不需要 `<all_urls>`。挑选与拼装仍复用 `shared/copyLink.ts`（注入的函数不能 import，
+所以它只负责读原始候选）。
+
 ## 八、权限
 
 | 项 | 值 | 为什么 |
 | --- | --- | --- |
-| `permissions` | `storage`、`contextMenus`、`alarms` | 存数据；工具栏图标右键两项；定时备份（MV3 的 worker 会被回收，`setTimeout` 活不过去） |
+| `permissions` | `storage`、`contextMenus`、`alarms`、`clipboardWrite`、`scripting`、`activeTab` | 存数据；右键菜单（图标上两项、页面上两对复制项，分别吃 `page` 与 `selection` 上下文）；定时备份（MV3 的 worker 会被回收，`setTimeout` 活不过去）；菜单触发的复制没有页面手势，`execCommand('copy')` 需要 `clipboardWrite`；扩展更新后旧标签页的复制靠 `executeScript` 注入，`activeTab` 由「选中上下文菜单项」授予 |
 | `host_permissions` | `https://api.deepseek.com/*` | AI 请求从 service worker 发出，扩展 origin 的 `fetch` 要靠 host 权限才不受 CORS 约束 |
 | `optional_host_permissions` | `https://github.com/*`、`https://api.github.com/*` | GitHub 备份。点「连接 GitHub」时才 `permissions.request`，安装时不弹警告 |
 | `minimum_chrome_version` | 130 | `storage.local.getKeys`（4.2 的第二级查找只读键名） |

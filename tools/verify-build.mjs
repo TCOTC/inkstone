@@ -16,11 +16,18 @@ const DIST = resolve(ROOT, 'dist/chrome')
 /**
  * 期望的权限集：多一个都算漂移，必须同步更新 docs/design.md。
  *
- * `contextMenus` 只用于给工具栏图标加两个右键条目（我的划线 / 偏好设置），
- * 不涉及任何页面数据。`alarms` 只用来排定时备份（MV3 的 worker 会被回收，
- * `setTimeout` 活不过去），装它不会额外弹权限提示。
+ * `contextMenus` 用于工具栏图标右键两项与页面右键的两对复制项（`copy-title-link*` 吃 `page`、
+ * `copy-selection-link*` 吃 `selection`），不涉及任何页面数据。`alarms` 只用来排定时备份
+ * （MV3 的 worker 会被回收，`setTimeout` 活不过去），装它不会额外弹权限提示。`clipboardWrite`
+ * 让右键菜单触发的复制能在**没有页面手势**的情况下写剪贴板（`document.execCommand('copy')`
+ * 在 content script 里需要它）；装它同样不弹权限提示。
+ *
+ * `scripting` + `activeTab` 只服务一条路径：扩展更新后旧标签页的 content script 已脱钩，
+ * 右键菜单还在但没有人接，于是 `executeScript` 注入两个自包含函数当场做完复制。
+ * `activeTab` 由「选中上下文菜单项」授予（官方列出的授予方式），**不需要** `<all_urls>`；
+ * 两者都不产生安装时的权限警告。
  */
-const EXPECTED_PERMISSIONS = ['storage', 'contextMenus', 'alarms']
+const EXPECTED_PERMISSIONS = ['storage', 'contextMenus', 'alarms', 'clipboardWrite', 'scripting', 'activeTab']
 
 /**
  * 期望的 host 权限，**只有 AI 接口这一个**。
@@ -114,7 +121,12 @@ check(
   JSON.stringify(actual) === JSON.stringify(wanted),
   `权限与预期不一致\n    预期 ${wanted.join(', ')}\n    实际 ${actual.join(', ')}`
 )
-check(!actual.includes('scripting'), '出现了 scripting 权限，注入范围由 content_scripts 声明')
+// `scripting` 只能配合 `activeTab` 用，而且只允许在用户点击的那一刻注入（扩展更新后的复制兜底）。
+// 两者必须同时出现：缺 `activeTab` 就等于「靠 host 权限注入」，那会把注入范围扩大到全站。
+check(
+  actual.includes('scripting') === actual.includes('activeTab'),
+  'scripting 与 activeTab 必须成对出现（前者只用于点击那一刻的 executeScript）'
+)
 
 // content script 必须覆盖所有站点，否则「打开一个划过的页面」会因为没注入而静默失效。
 const matches = manifest.content_scripts?.[0]?.matches ?? []
