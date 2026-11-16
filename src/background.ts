@@ -25,6 +25,7 @@ import {
 } from './shared/messages'
 import {buildMessages} from './shared/prompt'
 import {LIBRARY_HASH} from './shared/route'
+import {BACKUP_ALARM, runScheduledBackup, scheduleAfterWrite, syncBackupAlarm} from './shared/githubService'
 import {loadSettings, effectivePrompt, effectiveSystem} from './shared/settings'
 import {AI_KEY_STORAGE, AI_WRAP_STORAGE, PAGE_PREFIX, SETTINGS_KEY} from './shared/storageKeys'
 import {
@@ -354,6 +355,13 @@ async function mirrorAiKey(changes: Record<string, chrome.storage.StorageChange>
 
 chrome.runtime.onStartup.addListener(() => void pullOnBoot())
 chrome.runtime.onInstalled.addListener(() => void pullOnBoot())
+chrome.runtime.onStartup.addListener(() => void syncBackupAlarm())
+chrome.runtime.onInstalled.addListener(() => void syncBackupAlarm())
+
+/** 定时备份到 GitHub。alarm 由浏览器保存，worker 被回收也不丢。 */
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === BACKUP_ALARM) void runScheduledBackup()
+})
 
 /** 它刚把同步打开就补一次完整同步，否则本机只在本地存在的划线永远上不去。 */
 async function onRemoteSettingsChanged(): Promise<void> {
@@ -369,6 +377,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
     // 本机改了设置 → 镜像上去（`pushSettings` 自己会比较，没变就不写）。
     if (changes[SETTINGS_KEY]) {
       void pushSettings()
+      // 自动备份的间隔可能刚变过：对一次 alarm，否则要等下一个周期才生效。
+      void syncBackupAlarm()
       return
     }
     // Key 与设置同一条口径：始终镜像（密文 + 包装密钥成对搬）。
@@ -376,6 +386,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
       void mirrorAiKey(changes)
       return
     }
+    // 本机写了划线 → 排一次备份（已有的排期不动）。
+    if (Object.keys(changes).some((key) => key.startsWith(PAGE_PREFIX))) void scheduleAfterWrite()
   }
   if (area !== 'sync') return
 

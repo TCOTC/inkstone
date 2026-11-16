@@ -17,9 +17,10 @@ const DIST = resolve(ROOT, 'dist/chrome')
  * 期望的权限集：多一个都算漂移，必须同步更新 docs/design.md。
  *
  * `contextMenus` 只用于给工具栏图标加两个右键条目（我的划线 / 偏好设置），
- * 不涉及任何页面数据。
+ * 不涉及任何页面数据。`alarms` 只用来排定时备份（MV3 的 worker 会被回收，
+ * `setTimeout` 活不过去），装它不会额外弹权限提示。
  */
-const EXPECTED_PERMISSIONS = ['storage', 'contextMenus']
+const EXPECTED_PERMISSIONS = ['storage', 'contextMenus', 'alarms']
 
 /**
  * 期望的 host 权限，**只有 AI 接口这一个**。
@@ -27,11 +28,17 @@ const EXPECTED_PERMISSIONS = ['storage', 'contextMenus']
  * 划词翻译/解释的请求从 service worker 发出；扩展 origin 的 fetch 要靠 host 权限
  * 才能绕过 CORS（页面源的 content script 永远受 CORS 约束）。页面注入仍然由
  * `content_scripts.matches` 声明，这里**不能**出现 `<all_urls>`。
- *
- * 扩展**只支持 DeepSeek 官方接口**（翻译/解释要用它的服务端联网工具），地址不可配，
- * 所以没有 `optional_host_permissions`。
  */
 const EXPECTED_HOST_PERMISSIONS = ['https://api.deepseek.com/*']
+
+/**
+ * 可选的 host 权限：GitHub 备份。
+ *
+ * 用 `optional_host_permissions` 而不是写进 `host_permissions`：绝大多数人不开备份，
+ * 不该在安装时被吓一跳。点「连接 GitHub」时才 `permissions.request` —— 那次点击就是
+ * 需要的手势。
+ */
+const EXPECTED_OPTIONAL_HOST_PERMISSIONS = ['https://api.github.com/*', 'https://github.com/*']
 
 /** 清单里必须指向这些文件的入口。 */
 const EXPECTED_ENTRIES = {
@@ -96,8 +103,8 @@ check(
 )
 const optionalHosts = [...(manifest.optional_host_permissions ?? [])].sort()
 check(
-  optionalHosts.length === 0,
-  `不该出现 optional_host_permissions：界面只支持 DeepSeek 官方接口，实际 ${optionalHosts.join(', ')}`
+  JSON.stringify(optionalHosts) === JSON.stringify([...EXPECTED_OPTIONAL_HOST_PERMISSIONS].sort()),
+  `optional_host_permissions 与预期不一致\n    预期 ${EXPECTED_OPTIONAL_HOST_PERMISSIONS.join(', ')}\n    实际 ${optionalHosts.join(', ') || '(空)'}`
 )
 check(!('optional_permissions' in manifest), '出现了 optional_permissions，本项目用不到')
 
@@ -157,7 +164,7 @@ check(
 
 console.log(`  ${manifest.name} ${manifest.version} — 权限 ${actual.join(', ')}`)
 console.log(`  host 权限 ${hosts.join(', ') || '(无)'}`)
-console.log('  可选 host 权限：无（地址固定在代码里，只支持 DeepSeek 官方接口）')
+console.log(`  可选 host 权限：${EXPECTED_OPTIONAL_HOST_PERMISSIONS.join(', ')}（GitHub 备份，点连接时才申请）`)
 console.log(`  minimum_chrome_version ${manifest.minimum_chrome_version}`)
 
 // 扩展 ID 决定 storage 分区：ID 变了，磁盘上的数据还在但没有任何入口能读到。

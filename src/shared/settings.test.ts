@@ -14,7 +14,7 @@ import {
   PROMPT_TEXT_SLOT
 } from './prompt'
 import {effectivePrompt, effectiveSystem, normalizeSettings, sameSettings, withPromptMode} from './settings'
-import {DEFAULT_SETTINGS, type Settings} from './types'
+import {BACKUP_INTERVAL_LABELS, BACKUP_INTERVALS, DEFAULT_BACKUP_MINUTES, DEFAULT_SETTINGS, type Settings} from './types'
 
 test('默认设置里没有地址与模型：它们固定在代码里', () => {
   assert.equal('aiBaseUrl' in DEFAULT_SETTINGS, false)
@@ -117,6 +117,27 @@ test('sameSettings 认得出提示词差异', () => {
   const custom = withPromptMode(base, 'translate', 'user', 'custom')
   assert.equal(sameSettings(custom, base), false)
   assert.equal(sameSettings(base, custom), false)
+})
+
+test('自动备份间隔：默认每小时，只认档位里的值，其余当关闭', () => {
+  assert.equal(DEFAULT_SETTINGS.autoBackupMinutes, DEFAULT_BACKUP_MINUTES)
+  assert.equal(normalizeSettings({}).autoBackupMinutes, DEFAULT_BACKUP_MINUTES)
+  for (const value of BACKUP_INTERVALS) {
+    assert.equal(normalizeSettings({autoBackupMinutes: value}).autoBackupMinutes, value)
+    // 每个档位都要有文案，否则下拉里会出现空行。
+    const label = BACKUP_INTERVAL_LABELS[value]
+    assert.equal(typeof label, 'string', String(value))
+    assert.ok((label ?? '').length > 0, String(value))
+  }
+  // 写了但不认识的间隔当成「关闭」：那是一个明确的值，不该猜它想说什么。
+  for (const raw of [1, 5, 120, -60, '60', null]) {
+    assert.equal(normalizeSettings({autoBackupMinutes: raw}).autoBackupMinutes, 0, String(raw))
+  }
+  // 缺字段退回默认：老备份里没有这一项，不该因为导入就被关掉。
+  assert.equal(normalizeSettings({autoBackupMinutes: undefined}).autoBackupMinutes, DEFAULT_BACKUP_MINUTES)
+  // 它是设置的一部分：改了就要镜像出去。
+  const base: Settings = {...DEFAULT_SETTINGS}
+  assert.equal(sameSettings({...base, autoBackupMinutes: 360}, base), false)
 })
 
 test('sameSettings 认得出设置差异', () => {

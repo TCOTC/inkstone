@@ -1,5 +1,13 @@
 import {SETTINGS_KEY} from './storageKeys'
-import {DEFAULT_SETTINGS, type Extra, type PromptKind, type PromptMode, type PromptModes, type Settings} from './types'
+import {
+  DEFAULT_SETTINGS,
+  normalizeBackupMinutes,
+  type Extra,
+  type PromptKind,
+  type PromptMode,
+  type PromptModes,
+  type Settings
+} from './types'
 import {isPenStyle} from './styles'
 import {
   AI_LANGUAGES,
@@ -23,6 +31,7 @@ const SETTINGS_KEYS: readonly string[] = [
   'aiSystemExplain',
   'aiPromptTranslate',
   'aiPromptExplain',
+  'autoBackupMinutes',
   // `extra` 自己不是设置项：它承载的就是「不认识的键」，不能把自己再收进去套成两层。
   'extra'
 ]
@@ -85,7 +94,8 @@ export function normalizeSettings(raw: unknown): Settings {
     aiSystemTranslate,
     aiSystemExplain,
     aiPromptTranslate,
-    aiPromptExplain
+    aiPromptExplain,
+    autoBackupMinutes: normalizeBackupMinutes(value.autoBackupMinutes)
   }
   if (extra) settings.extra = extra
   return settings
@@ -178,6 +188,7 @@ export function sameSettings(left: unknown, right: Settings): boolean {
     value.aiSystemExplain === right.aiSystemExplain &&
     value.aiPromptTranslate === right.aiPromptTranslate &&
     value.aiPromptExplain === right.aiPromptExplain &&
+    value.autoBackupMinutes === right.autoBackupMinutes &&
     extraKey(value.extra) === extraKey(right.extra)
   )
 }

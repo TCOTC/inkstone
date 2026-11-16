@@ -1,112 +1,22 @@
 /**
- * API Key：**磁盘密文，内存明文**（AES-GCM，包装密钥与密文分两个键）。
+ * API Key：**磁盘密文，内存明文**。加密本体在 `shared/sealed.ts`，这里只管存取语义。
  *
  * 包装密钥也在同一份 storage 里，所以这层只挡「扫磁盘明文」与误操作，
  * 挡不住能读 profile 目录的程序。威胁模型与取舍见 `docs/design.md` §9.5。
- * 包装密钥不写死、也不用扩展 ID 派生：开发版 ID 随加载路径变，派生会让 key 解不开。
  *
  * 密文与包装密钥会**成对**镜像到 `storage.sync`（见 `shared/sync.ts`）：分开搬运会出现
  * 「密文能拿到、密钥没有」的死状态，而缺密钥时这里只会解不开（不会凭空生成一把去覆盖同步区的）。
  */
 
+import {ensureWrapKey, openText, readWrapKey, sealText, wrapBytes} from './sealed'
 import {AI_KEY_STORAGE, AI_WRAP_STORAGE} from './storageKeys'
 
 /** 只防手滑粘进一大段东西。 */
 const MAX_KEY_LENGTH = 400
 
-/** AES-GCM 的 IV 长度（规范要求 12 字节）。 */
-const IV_BYTES = 12
-/** 包装密钥长度（AES-256）。 */
-const WRAP_BYTES = 32
-
-function toBase64(bytes: Uint8Array): string {
-  let latin = ''
-  for (const byte of bytes) latin += String.fromCharCode(byte)
-  return btoa(latin)
-}
-
-/**
- * 显式标 `Uint8Array<ArrayBuffer>`：`crypto.subtle` 的入参是 `BufferSource`，
- * 而裸 `Uint8Array` 的泛型默认是 `ArrayBufferLike`（可能含 `SharedArrayBuffer`），
- * strict 下会被判成不可赋值。
- */
-function fromBase64(text: string): Uint8Array<ArrayBuffer> | null {
-  try {
-    const latin = atob(text)
-    const bytes = new Uint8Array(latin.length)
-    for (let i = 0; i < latin.length; i++) bytes[i] = latin.charCodeAt(i)
-    return bytes
-  } catch {
-    return null
-  }
-}
-
-async function importWrapKey(raw: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
-  return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt'])
-}
-
-/**
- * 加密。返回 `base64(iv || ciphertext)`。
- *
- * AES-GCM 带认证标签：密文被改过就解不开（返回 null），不会静默给出错误明文。
- * IV 每次随机——重复 IV 会让 AES-GCM 直接失去安全性，这是最容易写错的一处。
- */
-export async function sealKey(plain: string, wrapKeyRaw: Uint8Array<ArrayBuffer>): Promise<string> {
-  const key = await importWrapKey(wrapKeyRaw)
-  const iv = crypto.getRandomValues(new Uint8Array(IV_BYTES))
-  const cipher = new Uint8Array(
-    await crypto.subtle.encrypt({name: 'AES-GCM', iv}, key, new TextEncoder().encode(plain))
-  )
-  const joined = new Uint8Array(iv.length + cipher.length)
-  joined.set(iv, 0)
-  joined.set(cipher, iv.length)
-  return toBase64(joined)
-}
-
-/**
- * 解密。任何失败（base64 坏了、长度不够、认证失败、密钥不匹配）都返回 `null`。
- *
- * **不抛错**是有意的：调用方只想问「能拿到 key 吗」，拿不到就当没配，
- * 让用户重填比在页面上抛一个 WebCrypto 的 DOMException 有用。
- */
-export async function openKey(
-  token: string,
-  wrapKeyRaw: Uint8Array<ArrayBuffer>
-): Promise<string | null> {
-  const bytes = fromBase64(token)
-  if (!bytes || bytes.length <= IV_BYTES) return null
-  try {
-    const key = await importWrapKey(wrapKeyRaw)
-    const plain = await crypto.subtle.decrypt(
-      {name: 'AES-GCM', iv: bytes.subarray(0, IV_BYTES)},
-      key,
-      bytes.subarray(IV_BYTES)
-    )
-    return new TextDecoder().decode(plain)
-  } catch {
-    return null
-  }
-}
-
-/**
- * 读包装密钥；没有就生成一个并落盘。
- *
- * 生成后再**回读一次**：两个上下文可能同时首次写入，后写的会覆盖先写的。
- * 回读保证返回的确实是磁盘上那一份，否则用它加密出来的密文下次解不开。
- */
-async function ensureWrapKey(): Promise<Uint8Array<ArrayBuffer>> {
-  const stored = await chrome.storage.local.get(AI_WRAP_STORAGE)
-  const existing = stored[AI_WRAP_STORAGE]
-  if (typeof existing === 'string') {
-    const bytes = fromBase64(existing)
-    if (bytes && bytes.length === WRAP_BYTES) return bytes
-  }
-  const fresh = crypto.getRandomValues(new Uint8Array(WRAP_BYTES))
-  await chrome.storage.local.set({[AI_WRAP_STORAGE]: toBase64(fresh)})
-  const check = await chrome.storage.local.get(AI_WRAP_STORAGE)
-  const bytes = typeof check[AI_WRAP_STORAGE] === 'string' ? fromBase64(check[AI_WRAP_STORAGE]) : null
-  return bytes && bytes.length === WRAP_BYTES ? bytes : fresh
-}
+/** 加密与解密。保留这两个名字：调用方与用例都按「Key」称呼它。 */
+export const sealKey = sealText
+export const openKey = openText
 
 /** 本机的密文与包装密钥。**同步时必须成对搬运**，否则解不开。 */
 export interface KeyMaterial {
@@ -122,13 +32,6 @@ export async function readKeyMaterial(): Promise<KeyMaterial | null> {
   if (typeof key !== 'string' || !key) return null
   if (typeof wrap !== 'string' || !wrap) return null
   return {key, wrap}
-}
-
-/** 校验并解出包装密钥的原始字节。 */
-function wrapBytes(value: unknown): Uint8Array<ArrayBuffer> | null {
-  if (typeof value !== 'string') return null
-  const bytes = fromBase64(value)
-  return bytes && bytes.length === WRAP_BYTES ? bytes : null
 }
 
 /**
@@ -160,7 +63,7 @@ export async function loadAiKey(): Promise<string> {
     const stored = await chrome.storage.local.get([AI_KEY_STORAGE, AI_WRAP_STORAGE])
     const raw = stored[AI_KEY_STORAGE]
     if (typeof raw !== 'string' || raw === '') return ''
-    const wrap = wrapBytes(stored[AI_WRAP_STORAGE])
+    const wrap = await readWrapKey(AI_WRAP_STORAGE)
     if (!wrap) return ''
     return (await openKey(raw, wrap)) ?? ''
   } catch {
@@ -189,7 +92,7 @@ export async function saveAiKey(raw: string): Promise<void> {
     await clearAiKey()
     return
   }
-  const wrap = await ensureWrapKey()
+  const wrap = await ensureWrapKey(AI_WRAP_STORAGE)
   await chrome.storage.local.set({[AI_KEY_STORAGE]: await sealKey(trimmed, wrap)})
 }
 

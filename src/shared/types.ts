@@ -78,8 +78,49 @@ export interface Settings {
   aiPromptTranslate: string
   /** 「解释」的自定义 user 模板，规则同上 */
   aiPromptExplain: string
+  /**
+   * 自动备份到 GitHub 的间隔（分钟）。**0 = 关闭**（默认）。
+   * 只在连上 GitHub 且填了仓库时才有意义；取值限定在 `BACKUP_INTERVALS` 里。
+   */
+  autoBackupMinutes: number
   /** 本版本不认识的可序列化字段（见 `Extra`）：回退到旧版本再装新版时不至于丢新设置 */
   extra?: Extra
+}
+
+/**
+ * 可选的自动备份间隔（分钟）。**0 表示关闭**。
+ *
+ * 只放这几档：`chrome.alarms` 的最小粒度是 1 分钟，但真按分钟备份只会把提交历史淹掉，
+ * 而备份的价值全在「历史可读」上。
+ */
+export const BACKUP_INTERVALS = [0, 60, 360, 1440] as const
+
+/**
+ * 默认间隔：每小时。
+ *
+ * 它不是「默认开启备份」：排期还要「连上 GitHub」+「填了仓库」两个前提（见
+ * `githubService.syncBackupAlarm`），两样都没有的人一条 alarm 也不会建。
+ * 内容没变时不会产生提交，所以这一档不会把历史撑满。
+ */
+export const DEFAULT_BACKUP_MINUTES = 60
+
+/** 每个档位的中文文案。键必须覆盖 `BACKUP_INTERVALS`（有用例锁着）。 */
+export const BACKUP_INTERVAL_LABELS: Readonly<Record<number, string>> = {
+  0: '关闭',
+  60: '每小时',
+  360: '每 6 小时',
+  1440: '每天'
+}
+
+/**
+ * 把任意来源的间隔收成合法值。
+ *
+ * 两件事分开：**缺字段**退回默认（老备份里没有这一项，不该因为导入就被关掉）；
+ * **写了但不认识**当归零——那是明确的一个值，猜它想说什么不如让用户自己重选。
+ */
+export function normalizeBackupMinutes(value: unknown): number {
+  if (value === undefined) return DEFAULT_BACKUP_MINUTES
+  return typeof value === 'number' && (BACKUP_INTERVALS as readonly number[]).includes(value) ? value : 0
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -98,5 +139,7 @@ export const DEFAULT_SETTINGS: Settings = {
   aiSystemTranslate: '',
   aiSystemExplain: '',
   aiPromptTranslate: '',
-  aiPromptExplain: ''
+  aiPromptExplain: '',
+  // 默认每小时；真正排期还要「连上 GitHub」+「填了仓库」两个前提。
+  autoBackupMinutes: DEFAULT_BACKUP_MINUTES
 }

@@ -31,6 +31,15 @@ export const AI_KEY_STORAGE = 'ai:key'
 /** 包装密钥，与密文成对搬运。 */
 export const AI_WRAP_STORAGE = 'ai:wrap'
 
+/** GitHub 授权密文（access + refresh + 到期时刻，整体加密成一个值）。 */
+export const GH_TOKEN_STORAGE = 'gh:token'
+
+/** GitHub 的包装密钥，与上一条成对使用。**不镜像到同步区**：重装后本来就要重新登录。 */
+export const GH_WRAP_STORAGE = 'gh:wrap'
+
+/** 备份目标仓库（`owner/repo`，明文）。 */
+export const GH_REPO_STORAGE = 'gh:repo'
+
 /** 某页在存储里的键（`chrome.storage.local` 与 `chrome.storage.sync` 都用它）。 */
 export function pageStorageKey(url: string): string {
   return PAGE_PREFIX + pageKey(url)

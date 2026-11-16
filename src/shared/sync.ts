@@ -3,7 +3,7 @@
  *
  * Chrome 不会替扩展搬运 local → sync，所以同步必然包含一步主动写入；`Settings.syncHighlights`
  * 只表示「要不要把页行放进那个会被 Chrome 搬走的区」。合并与墓碑规则、配额口径见
- * `docs/design.md` §4.7。
+ * `docs/design.md` §4.8。
  *
  * 体积一律按 UTF-8 字节量：`JSON.stringify().length` 对中文会低估。
  */

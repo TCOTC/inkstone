@@ -460,6 +460,70 @@ input[type='checkbox']:focus-visible {
   color: var(--danger);
 }
 
+/* GitHub 备份：设备码要能被一眼看清并手动选中（复制按钮可能被剪贴板权限挡住）。 */
+.gh-device {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--control-h);
+}
+
+/* 标签与 `.row > span:first-child` 同字号，码本身放大一档。 */
+.gh-device-label {
+  flex: none;
+  font-size: var(--fs-label);
+}
+
+.gh-code {
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 16px;
+  letter-spacing: 0.1em;
+  user-select: all;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--text) 4%, var(--card));
+}
+
+/* 备份历史：每行「时间 · 摘要 · 恢复」，高到能被扫读但不抢卡片。 */
+.gh-history {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gh-commit {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 4px 0;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.gh-commit-time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  opacity: 0.7;
+}
+
+.gh-commit-msg {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 历史行里的按钮要跟着行高走（34px 会把每一行撑成一条）。 */
+.gh-commit button {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  font-size: var(--fs-xs);
+}
+
 /* 保存反馈：全页唯一一处。`ok` 短暂出现，`error` 常驻到下一次操作。 */
 .toast {
   position: fixed;

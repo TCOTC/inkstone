@@ -108,10 +108,33 @@ Chrome 以外的浏览器。
 旧版本），本机独有的线保留——否则「导出 → 继续划几条 → 导入旧备份」会把这段时间的划线全丢掉。
 同一条线在两边的未知字段取并集（本机优先），所以用旧版本导入一份旧备份也不会把新字段抹掉。
 保留的线接在导入数据的最大序号之后**重新编号**，不重编会和本地线撞号，之后按 id 删除会一次删两条。
-代价是导入不再能用来「瘦身」：想删掉整页请走「清空数据」或直接删划线。`unresolved` 是派生数据，
+代价是导入不再能用来「瘦身」：想删整页请走「清空数据」或直接删划线。`unresolved` 是派生数据，
 不进备份。
 
-### 4.6 写互斥
+**判等要忽略 `exportedAt`。** 每次生成备份都会写当时的时刻，所以「导出两次内容相同」这件事
+在字节层面永不成立。判等用去掉了 `exportedAt` 的指纹；否则每次定时备份都会留一个空提交，
+历史列表就废了。
+
+### 4.6 GitHub 备份
+
+**与 4.8 是两条独立的路**：那条走 Chrome 同步通道做逐页实时镜像，这条往用户自己的私有仓库
+写**一个文件**、每次备份一次提交。卸载扩展会连本机与 `storage.sync` 一起清掉，仓库里的提交不会
+——这是唯一能跨过卸载的通道。**Chrome sync 不是备份。**
+
+五条长期约束：
+
+- **只追加提交**：不 force push、不删分支、不重建仓库。历史是唯一的数据点来源。
+- **先读再比，不同才写**：指纹忽略 `exportedAt`（见 4.5）。内容没变就不产生提交。
+- **恢复是并集**，不是回滚：本机独有的线保留。要真正回到那个时间点得先「清空数据」。
+- **文件本身是可导入的备份**：形状与 4.5 完全一致，人在网页上下载任意历史版本就能手动恢复。
+- **排期用 `chrome.alarms`**：MV3 的 worker 会被回收，`setTimeout` 活不过去。已排着就不再排，
+  否则每写一条线都把排期往后推，等于永远不备份。
+
+认证用 **GitHub App + device flow**（不嵌 `client_secret`），权限只有 `Contents: Read and write`
+（外加 GitHub 强制附带的 `Metadata: Read-only`），安装范围限定到单个仓库。凭据与 API Key 同一条
+口径加密落盘，但**不镜像到 `storage.sync`**：重装后本来就要重新登录。
+
+### 4.7 写互斥
 
 storage 的 `get` 与 `set` 之间没有事务，「读 → 改 → 写」必须自己串行。两级：
 
@@ -129,7 +152,7 @@ storage 的 `get` 与 `set` 之间没有事务，「读 → 改 → 写」必须
 有超时上限，超时就照常写——宁可极小概率互相覆盖，也不要让划词卡住。批量导入按锁身份
 排序后逐个抢，避免两个并发导入以相反顺序互相等死。
 
-### 4.7 跨设备同步
+### 4.8 跨设备同步
 
 `storage.local` 永远是权威，`storage.sync` 只是通道。Chrome **不会**替扩展做 local → sync 的
 搬运，所以「同步」必然包含一步主动写入——`Settings.syncHighlights` 的含义就是「要不要把划线数据放进
@@ -273,12 +296,14 @@ Chrome 不会把已注入的 content script 从打开的标签页里换掉。更
 
 | 项 | 值 | 为什么 |
 | --- | --- | --- |
-| `permissions` | `storage`、`contextMenus` | 前者存数据；后者只给工具栏图标的右键加两项入口 |
+| `permissions` | `storage`、`contextMenus`、`alarms` | 存数据；工具栏图标右键两项；定时备份（MV3 的 worker 会被回收，`setTimeout` 活不过去） |
 | `host_permissions` | `https://api.deepseek.com/*` | AI 请求从 service worker 发出，扩展 origin 的 `fetch` 要靠 host 权限才不受 CORS 约束 |
+| `optional_host_permissions` | `https://github.com/*`、`https://api.github.com/*` | GitHub 备份。点「连接 GitHub」时才 `permissions.request`，安装时不弹警告 |
 | `minimum_chrome_version` | 130 | `storage.local.getKeys`（4.2 的第二级查找只读键名） |
 
 `content_scripts.matches` 由清单声明，**不额外申请页面访问权限**，也不需要 `scripting`
-（不在运行时动态注入）。AI 接口地址不可配，所以没有 `optional_host_permissions`。
+（不在运行时动态注入）。AI 接口地址不可配，所以 `host_permissions` 里只有它一个；
+GitHub 的两个域名是**可选**权限——不开备份的人永远用不到。
 
 加权限要三处同步：清单、本文这张表、`tools/verify-build.mjs` 的期望集。
 
