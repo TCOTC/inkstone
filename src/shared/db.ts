@@ -1,44 +1,31 @@
 /**
- * 存储访问层。键布局（`p:` / `m:` / `settings` / `unresolved`）见 `rowCodec.ts`。
+ * 存储访问层。键布局见 `storageKeys.ts`。
  *
  * 键就是 URL 本身：打开网页时一次命中，不需要「URL → id」索引，导入导出也天然幂等。
  * 用 storage 而不是 IndexedDB 的理由见 `docs/design.md` §4.1。
  */
-import {
-  decodePage,
-  decodeRows,
-  encodePage,
-  isLocalHighlight,
-  PAGE_PREFIX,
-  pageStorageKey,
-  type PageRow
-} from './rowCodec'
-import {isLiveLock, LOCK_PREFIX, withPageLock, withPageLocks} from './lock'
+import {isLiveLock, withPageLock, withPageLocks} from './lock'
+import {highlightSignature} from './merge'
+import {decodePage, decodeRows, encodePage, mergeExtra, type PageRow} from './rowCodec'
+import {LOCK_PREFIX, META_PREFIX, PAGE_PREFIX, pageStorageKey} from './storageKeys'
 import {clearRemote, pushPage, removeRemotePage} from './sync'
 import {clearTombstones, recordDeletion} from './tombstones'
 import {type HighlightRecord, type PageRecord} from './types'
+import {clearUnresolved} from './unresolved'
 import {looseKey, pageKey} from './url'
 
-/** 库级信息的键前缀。 */
-const META_PREFIX = 'm:'
-
 /**
- * 只读 `p:` 行；`h` 为空的顺手删掉（老版本留下的，正常写入不产出空行）。
+ * 只读 `p:` 行；`h` 为空的跳过（正常写入不产出空行——空页不落地）。
  */
 async function readRows(): Promise<Array<{key: string; row: PageRow}>> {
   const all = await chrome.storage.local.get(null)
   const rows: Array<{key: string; row: PageRow}> = []
-  const empty: string[] = []
   for (const [key, value] of Object.entries(all)) {
     if (!key.startsWith(PAGE_PREFIX)) continue
     const row = value as PageRow | undefined
-    if (!row || !Array.isArray(row.h) || row.h.length === 0) {
-      empty.push(key)
-      continue
-    }
+    if (!row || !Array.isArray(row.h) || row.h.length === 0) continue
     rows.push({key, row})
   }
-  if (empty.length > 0) await chrome.storage.local.remove(empty)
   return rows
 }
 
@@ -89,15 +76,23 @@ export async function getPageByUrl(url: string): Promise<PageRecord | null> {
 }
 
 export interface ImportSummary {
+  /** 新出现的页数 */
   added: number
+  /** 覆盖了已有记录的页数 */
   updated: number
-  highlights: number
+  /** 本次写入的划线条数（备份里的那些） */
+  importedHighlights: number
+  /** 本机独有的线（备份里没有），合并后保留下来 */
+  keptHighlights: number
 }
 
 /**
- * 按 URL 覆盖同页数据，但保留带 `local` 标记的线（本机划的）。
- * 本地线要**重新编号**接在后面：序号是页内整数，不重编会与导入数据撞号，
- * 之后按 id 删除会一次删两条。整段在页锁内执行。
+ * 导入：按内容签名与同页旧数据做**并集**，和跨设备合并同一套判等规则。
+ *
+ * 备份里的线是权威（覆盖同签名的旧版本），本机独有的线保留——否则「导出 → 继续划几条 →
+ * 导入旧备份」会把这段时间的划线全丢掉。不用 id 判断：两边序号都从 1 开始，同号必然撞车。
+ * 保留的线要**重新编号**接在后面，否则与导入数据撞号，之后按 id 删除会一次删两条。
+ * 整段在页锁内执行。
  */
 export async function importPages(pages: readonly PageRecord[]): Promise<ImportSummary> {
   return withPageLocks(
@@ -112,50 +107,65 @@ async function importLocked(pages: readonly PageRecord[]): Promise<ImportSummary
 
   let added = 0
   let updated = 0
-  let highlights = 0
+  let importedHighlights = 0
+  let keptHighlights = 0
   const batch: Record<string, PageRow> = {}
 
   for (const incoming of pages) {
     const key = pageStorageKey(incoming.url)
     const previous = known.get(key)
-    // 本地线全留，其余整批由本次数据取代。**不能**用「id 不在本次数据里」判：
-    // 两边序号都从 1 开始，同号会把用户自己划的线误删。
-    const kept = previous ? previous.highlights.filter((item) => item.local === true) : []
+    // 备份里已有的线由本次数据取代；本机独有的接在后面。
+    const seen = new Set(incoming.highlights.map(highlightSignature))
+    const kept = previous ? previous.highlights.filter((item) => !seen.has(highlightSignature(item))) : []
     if (incoming.highlights.length === 0 && kept.length === 0) {
       // 这一页在备份里是 0 条：空页不落地（规则见 `deleteHighlight`），本机那条也删掉。
       if (previous) await chrome.storage.local.remove(key)
       continue
     }
-    let nextId = incoming.highlights.reduce((max, item) => (item.id > max ? item.id : max), 0)
+    // 同签名的旧行可能比备份多几个未知字段（它来自更新的版本）：并集保留，本机优先。
+    const localBySignature = new Map(
+      (previous?.highlights ?? []).map((item) => [highlightSignature(item), item])
+    )
+    const merged = incoming.highlights.map((item) => {
+      const localExtra = localBySignature.get(highlightSignature(item))?.extra
+      const extra = mergeExtra(item.extra, localExtra)
+      return extra ? {...item, extra} : item
+    })
+    let nextId = merged.reduce((max, item) => (item.id > max ? item.id : max), 0)
     const carried = kept.map((item) => ({...item, id: (nextId += 1)}))
     added += previous ? 0 : 1
     updated += previous ? 1 : 0
-    highlights += incoming.highlights.length
-    batch[key] = encodePage({...incoming, highlights: [...incoming.highlights, ...carried]})
+    importedHighlights += incoming.highlights.length
+    keptHighlights += carried.length
+    const pageExtra = mergeExtra(incoming.extra, previous?.extra)
+    batch[key] = encodePage({
+      ...incoming,
+      ...(pageExtra ? {extra: pageExtra} : {}),
+      highlights: [...merged, ...carried]
+    })
   }
 
   await chrome.storage.local.set(batch)
-  await setMeta('importedAt', Date.now())
-  await setMeta('sourceCounts', {pages: pages.length, highlights})
+  await setMeta('lastImportAt', Date.now())
   // 导入是「本机权威」，整批推给同步端；远端多出来的线仍由并集合并保留。
   for (const page of pages) void pushPage(page.url)
 
-  return {added, updated, highlights}
+  return {added, updated, importedHighlights, keptHighlights}
 }
 
 /**
  * 页内序号，1 起，取 max + 1。不用内容 hash / 随机串：它们不可复现、必须全表查重，
  * 而追加划线本来就要读出整页数据，max 顺手就有。删最大号后再划会复用那个序号，
- * 唯一影响是深链的历史值可能指向新线（深链不会被存成 URL）。
+ * 唯一影响是以前的深链可能指向新线（深链不会被存成 URL）。
  */
-function nextLocalId(highlights: readonly HighlightRecord[]): number {
+function nextHighlightId(highlights: readonly HighlightRecord[]): number {
   let max = 0
   for (const item of highlights) if (item.id > max) max = item.id
   return max + 1
 }
 
 /**
- * 追加一条本地线（页面不存在时创建）。`id` / `local` 由这里填，调用方不必凑主键；
+ * 追加一条新划线（页面不存在时创建）。`id` 由这里填，调用方不必凑主键；
  * 整段读 → 算序号 → 写在页锁内执行，并发写者拿到的序号一定不同。
  */
 export async function addHighlight(
@@ -168,11 +178,11 @@ export async function addHighlight(
     const page: PageRecord = existing ?? {
       url: pageKey(url),
       title,
-      createdAt: Math.floor(Date.now() / 1000),
+      createdAtSec: Math.floor(Date.now() / 1000),
       highlights: []
     }
 
-    const highlight: HighlightRecord = {...draft, id: nextLocalId(page.highlights), local: true}
+    const highlight: HighlightRecord = {...draft, id: nextHighlightId(page.highlights)}
     const next: PageRecord = {...page, highlights: [...page.highlights, highlight]}
 
     // 键必须取自**记录自己的 URL**，不是传进来的 `url`：本页可能是靠回退匹配找到的
@@ -224,9 +234,10 @@ export async function setMeta(name: string, value: unknown): Promise<void> {
 }
 
 /**
- * 清空数据：删本地 `p:`、`m:`、墓碑与已过期的写锁，**以及同步端的页行**，
- * 不动设置与未定位清单。
+ * 清空数据：删本地 `p:`、`m:`、墓碑、未定位清单与已过期的写锁，**以及同步端的页行**。
+ * 设置与 API Key 不动（那是配置，不是数据）。
  *
+ * 未定位清单一起清：里面记的是「这些划线在正文里找不到」，划线都没了，清单只会变成幽灵。
  * 同步端也必须清：否则下次启动的全量拉取会把整库原样搬回来，看起来像「清空失败」。
  * 还在租期内的锁不碰——那种只可能是别的标签页正在写入。
  */
@@ -239,6 +250,7 @@ export async function clearAll(): Promise<void> {
   if (keys.length > 0) await chrome.storage.local.remove(keys)
   // 墓碑跟着走：记录里已经没有任何划线，留着它们只会挡住以后的重新导入。
   await clearTombstones()
+  await clearUnresolved()
   await clearRemote()
 }
 
@@ -246,26 +258,19 @@ export async function clearAll(): Promise<void> {
 export interface DatabaseStats {
   pages: number
   highlights: number
-  localHighlights: number
-  importedAt: number | null
+  /** 最近一次导入的时刻（毫秒）；没导入过为 null */
+  lastImportAt: number | null
 }
 
 export async function stats(): Promise<DatabaseStats> {
   const pages = await listPages()
   let highlights = 0
-  let localHighlights = 0
 
-  for (const page of pages) {
-    for (const item of page.highlights) {
-      highlights += 1
-      if (isLocalHighlight(item)) localHighlights += 1
-    }
-  }
+  for (const page of pages) highlights += page.highlights.length
 
   return {
     pages: pages.length,
     highlights,
-    localHighlights,
-    importedAt: await getMeta<number>('importedAt')
+    lastImportAt: await getMeta<number>('lastImportAt')
   }
 }

@@ -31,7 +31,7 @@ const syncLine = computed(() => {
 const hasRemote = computed(() => sync.value.pages > 0 || sync.value.bytes > 0)
 
 const syncEnabled = computed<boolean>({
-  get: () => settings.value.sync,
+  get: () => settings.value.syncHighlights,
   set: (value) => void applySync(value)
 })
 
@@ -41,8 +41,7 @@ const statLine = computed(() => {
   return [
     `${value.pages} 页`,
     `${value.highlights} 条划线`,
-    value.localHighlights ? `本地新增 ${value.localHighlights}` : '',
-    value.importedAt ? `导入于 ${new Date(value.importedAt).toLocaleDateString()}` : '尚未导入'
+    value.lastImportAt ? `导入于 ${new Date(value.lastImportAt).toLocaleDateString()}` : '尚未导入'
   ]
     .filter(Boolean)
     .join(' · ')
@@ -63,7 +62,7 @@ async function refreshSync(): Promise<void> {
  * （它先合并再上传）。关掉时**不删**同步端数据，另一台设备可能还在用它。
  */
 async function applySync(turnOn: boolean): Promise<void> {
-  if (!(await updateSettings({sync: turnOn}))) return
+  if (!(await updateSettings({syncHighlights: turnOn}))) return
   await pushSettings()
   if (!turnOn) {
     syncStatus.value = {
@@ -159,7 +158,12 @@ async function onImport(event: Event): Promise<void> {
     backupStatus.value = {text: `正在写入 ${parsed.pages.length} 页 / ${total} 条划线…`, kind: ''}
     const summary = await applyBackup(parsed)
     backupStatus.value = {
-      text: `导入完成：新增 ${summary.added} 页，更新 ${summary.updated} 页，${summary.highlights} 条划线`,
+      text: [
+        `导入完成：新增 ${summary.added} 页，更新 ${summary.updated} 页，${summary.importedHighlights} 条划线`,
+        summary.keptHighlights > 0 ? `保留本机独有的 ${summary.keptHighlights} 条` : ''
+      ]
+        .filter(Boolean)
+        .join('，'),
       kind: 'ok'
     }
 

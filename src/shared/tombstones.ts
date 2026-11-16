@@ -11,9 +11,8 @@
  *    超过 `TOMBSTONE_TTL_MS` 或在单页超过 `MAX_PER_PAGE` 条就淘汰最旧的。
  */
 import {highlightSignature} from './merge'
+import {TOMBSTONES_KEY} from './storageKeys'
 import type {HighlightRecord} from './types'
-
-const STORAGE_KEY = 'deleted'
 
 /** 保留期：两台设备都同步过的时间足够长，再久就该让内容回来了（例如站点恢复了原文）。 */
 const TOMBSTONE_TTL_MS = 90 * 24 * 60 * 60 * 1000
@@ -25,13 +24,13 @@ const MAX_PER_PAGE = 300
 export type TombstoneMap = Record<string, Record<string, number>>
 
 export async function loadTombstones(): Promise<TombstoneMap> {
-  const stored = await chrome.storage.local.get(STORAGE_KEY)
-  const value = stored[STORAGE_KEY]
+  const stored = await chrome.storage.local.get(TOMBSTONES_KEY)
+  const value = stored[TOMBSTONES_KEY]
   return value && typeof value === 'object' ? (value as TombstoneMap) : {}
 }
 
 async function saveTombstones(map: TombstoneMap): Promise<void> {
-  await chrome.storage.local.set({[STORAGE_KEY]: map})
+  await chrome.storage.local.set({[TOMBSTONES_KEY]: map})
 }
 
 /** 记下一条被删掉的划线。`pageKey` 是**存储键去掉前缀**后的规范 URL。 */
@@ -45,7 +44,7 @@ export async function recordDeletion(pageKey: string, highlight: HighlightRecord
 
 /** 清空（只在「清空全部数据」时跟着一起清）。直接删键，不留一个空对象在那里。 */
 export async function clearTombstones(): Promise<void> {
-  await chrome.storage.local.remove(STORAGE_KEY)
+  await chrome.storage.local.remove(TOMBSTONES_KEY)
 }
 
 function pruneBucket(bucket: Record<string, number>): Record<string, number> {

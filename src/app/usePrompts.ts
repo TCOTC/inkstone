@@ -16,16 +16,16 @@ import {withPromptMode} from '../shared/settings'
 import type {PromptKind, PromptMode, Settings} from '../shared/types'
 import {settings, settingsRevision, updateSettings} from './settingsStore'
 
-/** 各分组的字段：`system` 是角色设定（短），`prompt` 是完整任务模板（长）。 */
+/** 各分组的字段：`system` 是角色设定（短），`user` 是完整任务模板（长）。 */
 export const PROMPT_FIELDS = [
   {kind: 'system', label: '系统提示词', rows: 3},
-  {kind: 'prompt', label: '用户提示词', rows: 8}
+  {kind: 'user', label: '用户提示词', rows: 8}
 ] as const satisfies readonly {kind: PromptKind; label: string; rows: number}[]
 
 /** 自定义文案草稿（空串 = 没写过，切到「自定义」时用内置文案打底）。 */
 export const drafts = ref<Record<AiAction, Record<PromptKind, string>>>({
-  translate: {system: '', prompt: ''},
-  explain: {system: '', prompt: ''}
+  translate: {system: '', user: ''},
+  explain: {system: '', user: ''}
 })
 
 /**
@@ -33,8 +33,8 @@ export const drafts = ref<Record<AiAction, Record<PromptKind, string>>>({
  * 这一行只负责「为什么没存上」，否则四个字段各冒一句回执，比说明文字还吵。
  */
 export const promptErrors = ref<Record<AiAction, Record<PromptKind, string>>>({
-  translate: {system: '', prompt: ''},
-  explain: {system: '', prompt: ''}
+  translate: {system: '', user: ''},
+  explain: {system: '', user: ''}
 })
 
 /** 内置文案——「默认」模式用的就是它，也是切到「自定义」时的起点。 */
@@ -64,12 +64,12 @@ let loadedRevision = -1
  */
 function loadPrompts(): void {
   drafts.value = {
-    translate: {system: storedCustom('translate', 'system'), prompt: storedCustom('translate', 'prompt')},
-    explain: {system: storedCustom('explain', 'system'), prompt: storedCustom('explain', 'prompt')}
+    translate: {system: storedCustom('translate', 'system'), user: storedCustom('translate', 'user')},
+    explain: {system: storedCustom('explain', 'system'), user: storedCustom('explain', 'user')}
   }
   promptErrors.value = {
-    translate: {system: '', prompt: ''},
-    explain: {system: '', prompt: ''}
+    translate: {system: '', user: ''},
+    explain: {system: '', user: ''}
   }
   loadedRevision = settingsRevision.value
 }
@@ -96,7 +96,7 @@ watch(settingsRevision, loadPrompts)
 function customTexts(action: AiAction, kind: PromptKind): [string, string] {
   const draft = drafts.value[action][kind]
   const system = kind === 'system' ? draft : storedCustom(action, 'system')
-  const prompt = kind === 'prompt' ? draft : storedCustom(action, 'prompt')
+  const prompt = kind === 'user' ? draft : storedCustom(action, 'user')
   return [system, prompt]
 }
 
@@ -114,7 +114,7 @@ function promptPatch(action: AiAction, system: string, prompt: string): Partial<
  */
 export async function savePrompt(action: AiAction, kind: PromptKind): Promise<void> {
   const draft = drafts.value[action][kind]
-  if (kind === 'prompt' && !draft.includes(PROMPT_TEXT_SLOT)) {
+  if (kind === 'user' && !draft.includes(PROMPT_TEXT_SLOT)) {
     setError(action, kind, `必须保留 ${PROMPT_TEXT_SLOT}，否则模型看不到选中的文字。`)
     return
   }

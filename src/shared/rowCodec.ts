@@ -3,28 +3,51 @@
  *
  * **只有这一处做映射**。`chrome.storage.local` 与备份文件存的都是短键行，其余代码一律用
  * `PageRecord` / `HighlightRecord`。键名取 1~2 个字母是为了体积（117 条划线下实测省
- * 2.55 KB，占总量 14%），代价全部关在这个文件里。
+ * 2.55 KB，占总量 14%），代价全部关在这个文件里。键名本身见 `storageKeys.ts`。
  *
  * ```
- * 页面行  u=url  t=title  c=createdAt  h=highlights
- * 划线行  i=id   x=text   p=prev       q=next   c=createdAt   l=本地
+ * 页面行  u=url  t=title  c=createdAtSec  h=highlights
+ * 划线行  i=id   x=text   p=prev         q=next   c=createdAtSec
  * ```
  *
- * 页面的**存储键**是 `p:` + `pageKey(url)`，不在行里重复存。行里的 `u` 是原始 URL：
- * 备份文件是数组、没有键可用，且回退匹配要拿它做宽松比较。
+ * 页面的**存储键**是 `p:` + `pageKey(url)`，行里的 `u` 也存同一份原始 URL：备份文件是数组、
+ * 没有键可用，回退匹配也要拿它做宽松比较。解码时统一归一到 `pageKey`，所以内存里的
+ * `PageRecord.url` 与存储键必然一致。
  *
  * `x` 而不是 `t` 表示正文（`t` 留给页面标题）；`q` 而不是 `n` 表示后文。
- * `l` 只在本地新划的线上出现（值为 `1`）：来源靠字段表达，不塞进 id。
+ * 划线不存「谁创建的」：合并与导入都按内容签名判同一性，来源不影响任何行为。
+ *
+ * **不认识的键原样保留**（`extra`）：解码时收出来，编码时先 spread 回去，已知键写在后面覆盖。
+ * 于是「新版导出 → 旧版导入 → 旧版导出」不会把新字段抹掉，旧版本不是单向过滤器。
  */
-import {type HighlightRecord, type PageRecord} from './types'
+import {type Extra, type HighlightRecord, type PageRecord} from './types'
 import {pageKey} from './url'
 
-/** 页面键前缀。`listPages` / 同步都靠它从整个 storage 里筛出页面。 */
-export const PAGE_PREFIX = 'p:'
+/** 页面行的已知键。其余键进 `extra`。 */
+const PAGE_KEYS: readonly string[] = ['u', 't', 'c', 'h']
+/** 划线行的已知键。 */
+const HIGHLIGHT_KEYS: readonly string[] = ['i', 'x', 'p', 'q', 'c']
 
-/** 某页在存储里的键（`chrome.storage.local` 与 `chrome.storage.sync` 都用它）。 */
-export function pageStorageKey(url: string): string {
-  return PAGE_PREFIX + pageKey(url)
+/** 收集 `known` 之外的键；没有时返回 `undefined`（不往对象里塞空壳）。 */
+function takeExtra(source: Record<string, unknown>, known: readonly string[]): Extra | undefined {
+  let extra: Extra | undefined
+  for (const key of Object.keys(source)) {
+    if (known.includes(key)) continue
+    extra ??= {}
+    extra[key] = source[key]
+  }
+  return extra
+}
+
+/**
+ * 两份未知字段取并集，`override` 优先。都为空时返回 `undefined`。
+ *
+ * 用在「同一份数据有两个版本」的两处：跨设备合并（本机优先）与备份导入
+ * （本机那份的未知字段不能被旧备份抹掉）。
+ */
+export function mergeExtra(base: Extra | undefined, override: Extra | undefined): Extra | undefined {
+  const merged = {...base, ...override}
+  return Object.keys(merged).length > 0 ? merged : undefined
 }
 
 /** 页面行（存储形状）。 */
@@ -42,18 +65,8 @@ export interface HighlightRow {
   x: string
   p: string
   q: string
+  /** 秒级时间戳 */
   c: number
-  /** 本地新划的标记；导入的行没有这个键 */
-  l?: 1
-}
-
-/**
- * 这条划线是不是本地新划的。
- *
- * 来源靠 `local` 字段表达，不再从 id 的前缀猜：id 是主键，不该兼职当标签。
- */
-export function isLocalHighlight(highlight: HighlightRecord): boolean {
-  return highlight.local === true
 }
 
 function text(value: unknown): string {
@@ -70,45 +83,55 @@ function seconds(value: unknown): number {
 }
 
 export function encodeHighlight(highlight: HighlightRecord): HighlightRow {
-  const row: HighlightRow = {
+  return {
+    ...highlight.extra,
     i: highlight.id,
     x: highlight.text,
     p: highlight.prev,
     q: highlight.next,
-    c: highlight.createdAt
+    c: highlight.createdAtSec
   }
-  if (highlight.local) row.l = 1
-  return row
 }
 
 export function decodeHighlight(row: HighlightRow): HighlightRecord {
+  const extra = takeExtra(row as unknown as Record<string, unknown>, HIGHLIGHT_KEYS)
   const highlight: HighlightRecord = {
     id: seq(row.i),
     text: text(row.x),
     prev: text(row.p),
     next: text(row.q),
-    createdAt: seconds(row.c)
+    createdAtSec: seconds(row.c)
   }
-  if (row.l === 1) highlight.local = true
+  if (extra) highlight.extra = extra
   return highlight
 }
 
 export function encodePage(page: PageRecord): PageRow {
   return {
+    ...page.extra,
     u: page.url,
     t: page.title,
-    c: page.createdAt,
+    c: page.createdAtSec,
     h: page.highlights.map(encodeHighlight)
   }
 }
 
+/**
+ * 行 → 记录。`u` 在这里归一到 `pageKey`：内存里的 `url` 只有一种写法，
+ * 于是 `pageStorageKey(page.url)` 永远等于它本来所在的键。
+ * 不认识的键进 `extra`，编码时原样写回。
+ */
 export function decodePage(row: PageRow): PageRecord {
-  return {
-    url: text(row.u),
+  const extra = takeExtra(row as unknown as Record<string, unknown>, PAGE_KEYS)
+  const url = text(row.u)
+  const page: PageRecord = {
+    url: url ? pageKey(url) : '',
     title: text(row.t),
-    createdAt: seconds(row.c),
+    createdAtSec: seconds(row.c),
     highlights: Array.isArray(row.h) ? row.h.map(decodeHighlight) : []
   }
+  if (extra) page.extra = extra
+  return page
 }
 
 /**

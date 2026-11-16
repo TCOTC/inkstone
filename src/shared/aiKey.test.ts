@@ -1,21 +1,12 @@
 /**
  * Key 加密存储的用例。重点是三件事：
- * 磁盘上真的没有明文、换一把包装密钥就解不开、旧版明文能迁上来。
+ * 磁盘上真的没有明文、换一把包装密钥就解不开、解不开时不清掉密文。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {
-  adoptKeyMaterial,
-  AI_KEY_STORAGE,
-  AI_WRAP_STORAGE,
-  loadAiKey,
-  maskKey,
-  openKey,
-  readKeyMaterial,
-  saveAiKey,
-  sealKey
-} from './aiKey'
+import {adoptKeyMaterial, loadAiKey, maskKey, openKey, readKeyMaterial, saveAiKey, sealKey} from './aiKey'
 import {installStorage, type Store} from './storageFixture'
+import {AI_KEY_STORAGE, AI_WRAP_STORAGE} from './storageKeys'
 import {pullAiKey, pushAiKey, removeRemoteAiKey} from './sync'
 
 const KEY = 'sk-abcdef0123456789abcdef0123456789'
@@ -42,10 +33,9 @@ test('密文里不含明文（这是整个改动的目的）', async () => {
     const sealed = await sealKey(plain, w)
     assert.ok(!sealed.includes(plain), sealed)
     // 连 base64 解出来也不该含明文
-    const bytes = atob(sealed.slice(3))
+    const bytes = atob(sealed)
     assert.ok(!bytes.includes(plain))
   }
-  assert.ok(await sealKey(KEY, w).then((token) => token.startsWith('v1:')))
 })
 
 test('同一明文两次加密结果不同（IV 每次随机）', async () => {
@@ -69,8 +59,8 @@ test('换一把包装密钥解不开', async () => {
   assert.equal(await openKey(sealed, wrap(5)), null)
 })
 
-test('非 v1 前缀一律拒绝（不把明文当密文试）', async () => {
-  for (const bad of ['', 'sk-plain', 'sk-abcdef0123456789abcdef0123456789', 'v2:abc', 'v1:', 'v1:!!!!']) {
+test('不是密文的字符串一律拒绝（不把明文当密文试）', async () => {
+  for (const bad of ['', 'sk-plain', 'sk-abcdef0123456789abcdef0123456789', '!!!!', 'YQ==']) {
     assert.equal(await openKey(bad, wrap(6)), null, bad)
   }
   assert.equal(await openKey(await sealKey(KEY, wrap(6)), wrap(6)), KEY)
@@ -89,7 +79,7 @@ test('save → load 往返，且磁盘上是密文', async () => {
   assert.equal(typeof store.get(AI_WRAP_STORAGE), 'string')
 })
 
-test('旧版明文不被接受，也不会自动升级（不留迁移路径）', async () => {
+test('磁盘上若只是明文就当作没配（不自动升级、也不清掉）', async () => {
   const store: Store = new Map()
   installStorage(store)
   store.set(AI_KEY_STORAGE, KEY)

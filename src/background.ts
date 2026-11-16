@@ -12,7 +12,7 @@ import {
   type AiSource,
   type AiUsage
 } from './shared/ai'
-import {AI_KEY_STORAGE, AI_WRAP_STORAGE, loadAiKey} from './shared/aiKey'
+import {loadAiKey} from './shared/aiKey'
 import {badgeText} from './shared/badge'
 import {BADGE_BACKGROUND, BADGE_TEXT} from './shared/colors'
 import {
@@ -25,8 +25,8 @@ import {
 } from './shared/messages'
 import {buildMessages} from './shared/prompt'
 import {LIBRARY_HASH} from './shared/route'
-import {PAGE_PREFIX} from './shared/rowCodec'
-import {loadSettings, effectivePrompt, effectiveSystem, SETTINGS_KEY} from './shared/settings'
+import {loadSettings, effectivePrompt, effectiveSystem} from './shared/settings'
+import {AI_KEY_STORAGE, AI_WRAP_STORAGE, PAGE_PREFIX, SETTINGS_KEY} from './shared/storageKeys'
 import {
   mergeRemoteKeys,
   pullAiKey,
@@ -186,7 +186,7 @@ function installShell(): void {
   applyBadgeStyle()
 }
 
-// 安装 / 更新时先清干净：老版本若留下条目，标题或顺序会与代码不一致。
+// 安装 / 更新时先清干净：上一次构建若留下条目，标题或顺序会与代码不一致。
 chrome.runtime.onInstalled.addListener(() => chrome.contextMenus.removeAll(installShell))
 chrome.runtime.onStartup.addListener(installShell)
 installShell()
@@ -333,7 +333,7 @@ async function pullOnBoot(): Promise<void> {
   await pullAiKey()
   await pushAiKey()
   const settings = await loadSettings()
-  if (!settings.sync) return
+  if (!settings.syncHighlights) return
   await pullAndMerge()
 }
 
@@ -361,7 +361,7 @@ async function onRemoteSettingsChanged(): Promise<void> {
   const changed = await pullSettings()
   if (!changed) return
   const after = await loadSettings()
-  if (!before.sync && after.sync) await syncNow()
+  if (!before.syncHighlights && after.syncHighlights) await syncNow()
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {

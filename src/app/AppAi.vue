@@ -21,9 +21,9 @@ import {drafts, ensurePromptsLoaded, PROMPT_FIELDS, promptErrors, savePrompt, se
 /** textarea 的 placeholder：三个占位符就是这里能用的全部替换位。 */
 const SLOT_HINT = `${PROMPT_TEXT_SLOT} ${PROMPT_LANG_SLOT} ${PROMPT_CONTEXT_SLOT}`
 
-const aiLang = computed<string>({
-  get: () => settings.value.aiLang,
-  set: (value) => void updateSettings({aiLang: value})
+const translateLang = computed<string>({
+  get: () => settings.value.translateLang,
+  set: (value) => void updateSettings({translateLang: value})
 })
 
 const aiThinking = computed<boolean>({
@@ -109,7 +109,7 @@ onMounted(() => {
     <div class="fields">
       <label class="row">
         <span>目标语言</span>
-        <select v-model="aiLang">
+        <select v-model="translateLang">
           <option v-for="item in AI_LANGUAGES" :key="item.code" :value="item.code">
             {{ item.name }}
           </option>

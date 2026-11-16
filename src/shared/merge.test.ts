@@ -7,11 +7,11 @@ import {highlightSignature, mergePage} from './merge'
 import type {HighlightRecord, PageRecord} from './types'
 
 function highlight(id: number, text: string, prev = '', next = ''): HighlightRecord {
-  return {id, text, prev, next, createdAt: id}
+  return {id, text, prev, next, createdAtSec: id}
 }
 
 function page(highlights: HighlightRecord[], title = '标题'): PageRecord {
-  return {url: 'https://example.com/a', title, createdAt: 1, highlights}
+  return {url: 'https://example.com/a', title, createdAtSec: 1, highlights}
 }
 
 test('签名只看正文三元组，且忽略空白差异', () => {
@@ -63,9 +63,9 @@ test('合并：本机没有改动时结果与本地完全相同（同步不会�
 test('墓碑：本机删掉的线不会被远端副本复活', () => {
   const local = page([highlight(1, '甲')])
   const remote = page([highlight(1, '甲'), highlight(2, '乙')])
-  const deleted = new Set([highlightSignature(highlight(1, '甲'))])
+  const tombstones = new Set([highlightSignature(highlight(1, '甲'))])
 
-  const {page: merged, dropped} = mergePage(local, remote, deleted)
+  const {page: merged, dropped} = mergePage(local, remote, tombstones)
 
   assert.deepEqual(merged.highlights.map((item) => item.text), ['乙'])
   // 本机那条与远端那条都算被墓碑挡住。

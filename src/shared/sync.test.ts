@@ -6,9 +6,10 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {encodePage, pageStorageKey, type PageRow} from './rowCodec'
+import {encodePage, type PageRow} from './rowCodec'
 import {highlightSignature} from './merge'
 import {installStorage, type Store} from './storageFixture'
+import {pageStorageKey} from './storageKeys'
 import {clearRemote, mergeRemoteKeys, pullAndMerge, pullSettings, pushSettings, removeRemotePage, syncNow, syncState, uploadAll} from './sync'
 import {DEFAULT_SETTINGS, type HighlightRecord, type PageRecord, type Settings} from './types'
 
@@ -16,11 +17,11 @@ const URL_A = 'https://example.com/a'
 const KEY_A = pageStorageKey(URL_A)
 
 function highlight(id: number, text: string): HighlightRecord {
-  return {id, text, prev: '', next: '', createdAt: id}
+  return {id, text, prev: '', next: '', createdAtSec: id}
 }
 
 function page(url: string, highlights: HighlightRecord[]): PageRecord {
-  return {url, title: '标题', createdAt: 1, highlights}
+  return {url, title: '标题', createdAtSec: 1, highlights}
 }
 
 /** 装上本地 + 同步两份 store，并把设置里的 sync 打开。 */
@@ -28,7 +29,7 @@ function setup(): {local: Store; remote: Store} {
   const local: Store = new Map()
   const remote: Store = new Map()
   installStorage(local, 0, remote)
-  local.set('settings', {penStyle: 1, enabled: true, sync: true})
+  local.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: true})
   return {local, remote}
 }
 
@@ -67,7 +68,7 @@ test('uploadAll：同步关掉时什么也不做', async () => {
   const local: Store = new Map()
   const remote: Store = new Map()
   installStorage(local, 0, remote)
-  local.set('settings', {penStyle: 1, enabled: true, sync: false})
+  local.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: false})
   local.set(KEY_A, encodePage(page(URL_A, [highlight(1, '甲')])))
 
   assert.equal((await uploadAll()).pushed, 0)
@@ -108,7 +109,7 @@ test('删除传播：本机删掉并留了墓碑，远端的旧副本不会把�
   remote.set(KEY_A, encodePage(page(URL_A, [highlight(1, '甲'), highlight(2, '乙')])))
   // 本机只剩「乙」，并记了「甲」的墓碑。
   local.set(KEY_A, encodePage(page(URL_A, [highlight(1, '乙')])))
-  local.set('deleted', {[URL_A]: {[highlightSignature(highlight(1, '甲'))]: Date.now()}})
+  local.set('tombstones', {[URL_A]: {[highlightSignature(highlight(1, '甲'))]: Date.now()}})
 
   const report = await pullAndMerge()
 
@@ -140,7 +141,7 @@ test('本机把一页删到空（本地已无行）时，远端那一页被删�
   const {local, remote} = setup()
   remote.set(KEY_A, encodePage(page(URL_A, [highlight(1, '甲'), highlight(2, '乙')])))
   // 本机已经删光这两条：整页记录与页行都没了，只留下墓碑。
-  local.set('deleted', {
+  local.set('tombstones', {
     [URL_A]: {
       [highlightSignature(highlight(1, '甲'))]: Date.now(),
       [highlightSignature(highlight(2, '乙'))]: Date.now()
@@ -186,7 +187,7 @@ test('removeRemotePage：删掉同步端那一页；远端没有该键时不白�
 
 test('removeRemotePage：同步关掉时不动同步区', async () => {
   const {local, remote} = setup()
-  local.set('settings', {penStyle: 1, enabled: true, sync: false})
+  local.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: false})
   remote.set(KEY_A, encodePage(page(URL_A, [highlight(1, '甲')])))
 
   await removeRemotePage(URL_A)
@@ -201,7 +202,7 @@ test('mergeRemoteKeys：忽略非 p: 键', async () => {
   const report = await mergeRemoteKeys(['settings'])
 
   assert.equal(report.merged, 0)
-  assert.deepEqual(local.get('settings'), {penStyle: 1, enabled: true, sync: true})
+  assert.deepEqual(local.get('settings'), {penStyle: 1, highlightEnabled: true, syncHighlights: true})
 })
 
 test('合并是幂等的：连拉两次不会再变', async () => {
@@ -218,7 +219,7 @@ test('合并是幂等的：连拉两次不会再变', async () => {
 
 test('同步关掉时不合并：另一台设备的改动不会逆着用户意愿长进来', async () => {
   const {local, remote} = setup()
-  local.set('settings', {penStyle: 1, enabled: true, sync: false})
+  local.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: false})
   local.set(KEY_A, encodePage(page(URL_A, [highlight(1, '甲')])))
   remote.set(KEY_A, encodePage(page(URL_A, [highlight(1, '甲'), highlight(2, '乙')])))
 
@@ -248,7 +249,7 @@ test('clearRemote：只清页行，别的键不动', async () => {
 
 test('clearRemote：同步关掉之后仍然能清（要收回数据时才最需要它）', async () => {
   const {local, remote} = setup()
-  local.set('settings', {penStyle: 1, enabled: true, sync: false})
+  local.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: false})
   remote.set(KEY_A, encodePage(page(URL_A, [highlight(1, '甲')])))
 
   assert.equal(await clearRemote(), 1)
@@ -257,7 +258,7 @@ test('clearRemote：同步关掉之后仍然能清（要收回数据时才最需
 
 test('syncState：同步关掉时也能看到云端还剩多少', async () => {
   const {local, remote} = setup()
-  local.set('settings', {penStyle: 1, enabled: true, sync: false})
+  local.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: false})
   remote.set(KEY_A, encodePage(page(URL_A, [highlight(1, '甲')])))
 
   const state = await syncState()
@@ -269,15 +270,18 @@ test('syncState：同步关掉时也能看到云端还剩多少', async () => {
 
 test('设置始终镜像：同步关着也会写到同步区', async () => {
   const {local, remote} = setup()
-  local.set('settings', {penStyle: 3, enabled: false, sync: false})
+  local.set('settings', {penStyle: 3, highlightEnabled: false, syncHighlights: false})
 
   assert.equal(await pushSettings(), true)
-  assert.deepEqual(remote.get('settings'), normalized({penStyle: 3, enabled: false, sync: false}))
+  assert.deepEqual(
+    remote.get('settings'),
+    normalized({penStyle: 3, highlightEnabled: false, syncHighlights: false})
+  )
 })
 
 test('设置镜像：内容没变时不重复写（省写配额）', async () => {
   const {local, remote} = setup()
-  local.set('settings', {penStyle: 2, enabled: true, sync: false})
+  local.set('settings', {penStyle: 2, highlightEnabled: true, syncHighlights: false})
 
   assert.equal(await pushSettings(), true)
   assert.equal(await pushSettings(), false)
@@ -286,55 +290,62 @@ test('设置镜像：内容没变时不重复写（省写配额）', async () =>
 
 test('设置镜像：缺字段与显式默认值算同一个值', async () => {
   const {local, remote} = setup()
-  remote.set('settings', {penStyle: 1, enabled: true, sync: false})
+  remote.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: false})
   // local 只有默认值（setup 里写的是完整三字段）；换成缺字段的形态再推一次。
-  local.set('settings', {penStyle: 1, enabled: true})
+  local.set('settings', {penStyle: 1, highlightEnabled: true})
 
   assert.equal(await pushSettings(), false)
 })
 
 test('采用远端设置：值不同时覆盖本机并报告已变', async () => {
   const {local, remote} = setup()
-  local.set('settings', {penStyle: 1, enabled: true, sync: false})
-  remote.set('settings', {penStyle: 4, enabled: false, sync: true})
+  local.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: false})
+  remote.set('settings', {penStyle: 4, highlightEnabled: false, syncHighlights: true})
 
   assert.equal(await pullSettings(), true)
-  assert.deepEqual(local.get('settings'), normalized({penStyle: 4, enabled: false, sync: true}))
+  assert.deepEqual(
+    local.get('settings'),
+    normalized({penStyle: 4, highlightEnabled: false, syncHighlights: true})
+  )
 })
 
 test('采用远端设置：值相同时不动本机', async () => {
   const {local, remote} = setup()
-  local.set('settings', {penStyle: 1, enabled: true, sync: true})
-  remote.set('settings', {penStyle: 1, enabled: true, sync: true})
+  local.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: true})
+  remote.set('settings', {penStyle: 1, highlightEnabled: true, syncHighlights: true})
 
   assert.equal(await pullSettings(), false)
 })
 
 test('采用远端设置：远端没有这个键时保持本机不变', async () => {
   const {local} = setup()
-  local.set('settings', {penStyle: 2, enabled: true, sync: false})
+  local.set('settings', {penStyle: 2, highlightEnabled: true, syncHighlights: false})
 
   assert.equal(await pullSettings(), false)
-  // 一个字段都不重写：本机存的还是自己写进去的那份（不是归一后的五字段）。
-  assert.deepEqual(local.get('settings'), {penStyle: 2, enabled: true, sync: false})
+  // 一个字段都不重写：本机存的还是自己写进去的那份（不是归一后的全部字段）。
+  assert.deepEqual(local.get('settings'), {penStyle: 2, highlightEnabled: true, syncHighlights: false})
 })
 
 test('采用远端设置：远端是脏值时按归一后的值写入', async () => {
   const {local, remote} = setup()
-  // 本机默认是 {penStyle:1, enabled:true, sync:true}（见 setup）。
-  // 远端的 99 越界 → 归一为 1；`enabled: 'yes'` 非 boolean → 归一为默认 true；只有 sync 真的变了。
-  remote.set('settings', {penStyle: 99, enabled: 'yes', sync: false})
+  // 本机默认是 {penStyle:1, highlightEnabled:true, syncHighlights:true}（见 setup）。
+  // 远端的 99 越界 → 归一为 1；`highlightEnabled: 'yes'` 非 boolean → 归一为默认 true；
+  // 只有 syncHighlights 真的变了。
+  remote.set('settings', {penStyle: 99, highlightEnabled: 'yes', syncHighlights: false})
 
   assert.equal(await pullSettings(), true)
-  assert.deepEqual(local.get('settings'), normalized({penStyle: 1, enabled: true, sync: false}))
+  assert.deepEqual(
+    local.get('settings'),
+    normalized({penStyle: 1, highlightEnabled: true, syncHighlights: false})
+  )
 })
 
 test('采用远端设置：归一后与本机相同时不写', async () => {
   const {local, remote} = setup()
-  remote.set('settings', {penStyle: 99, enabled: 'yes', sync: true})
+  remote.set('settings', {penStyle: 99, highlightEnabled: 'yes', syncHighlights: true})
 
   assert.equal(await pullSettings(), false)
-  assert.deepEqual(local.get('settings'), {penStyle: 1, enabled: true, sync: true})
+  assert.deepEqual(local.get('settings'), {penStyle: 1, highlightEnabled: true, syncHighlights: true})
 })
 
 test('syncNow：先合并再上传，两端一致', async () => {

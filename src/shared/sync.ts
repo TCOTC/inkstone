@@ -1,16 +1,17 @@
 /**
  * 跨设备同步：`storage.local` 是权威，`storage.sync` 只是通道。
  *
- * Chrome 不会替扩展搬运 local → sync，所以同步必然包含一步主动写入；`Settings.sync`
+ * Chrome 不会替扩展搬运 local → sync，所以同步必然包含一步主动写入；`Settings.syncHighlights`
  * 只表示「要不要把页行放进那个会被 Chrome 搬走的区」。合并与墓碑规则、配额口径见
  * `docs/design.md` §4.7。
  *
  * 体积一律按 UTF-8 字节量：`JSON.stringify().length` 对中文会低估。
  */
-import {adoptKeyMaterial, AI_KEY_STORAGE, AI_WRAP_STORAGE, clearAiKey, readKeyMaterial} from './aiKey'
+import {adoptKeyMaterial, clearAiKey, readKeyMaterial} from './aiKey'
 import {mergePage} from './merge'
-import {decodePage, encodePage, PAGE_PREFIX, pageStorageKey, type PageRow} from './rowCodec'
-import {loadSettings, normalizeSettings, sameSettings, saveSettings, SETTINGS_KEY} from './settings'
+import {decodePage, encodePage, type PageRow} from './rowCodec'
+import {loadSettings, normalizeSettings, sameSettings, saveSettings} from './settings'
+import {AI_KEY_STORAGE, AI_WRAP_STORAGE, PAGE_PREFIX, pageStorageKey, SETTINGS_KEY} from './storageKeys'
 import {loadTombstones, type TombstoneMap} from './tombstones'
 import {type PageRecord, type Settings} from './types'
 // 官方上限分别是 8192 B / 102400 B / 512 项，都留一点余量。
@@ -44,7 +45,7 @@ function bytesOf(value: unknown): number {
  */
 async function enabled(): Promise<boolean> {
   const settings = await loadSettings()
-  return settings.sync
+  return settings.syncHighlights
 }
 
 /** 内容与远端一致时跳过（写操作有配额）。 */
@@ -56,8 +57,8 @@ async function writeIfChanged(key: string, value: unknown, equal: (remote: unkno
 }
 
 /**
- * 设置始终镜像，**不看 `Settings.sync`**：开关本身就在设置里，先手动打开才同步就永远
- * 得在每台设备上各做一遍。返回值表示这次是否真的写了同步区。
+ * 设置始终镜像，**不看 `Settings.syncHighlights`**：开关本身就在设置里，先手动打开才同步
+ * 就永远得在每台设备上各做一遍。返回值表示这次是否真的写了同步区。
  */
 export async function pushSettings(): Promise<boolean> {
   const local = await loadSettings()
@@ -82,7 +83,7 @@ export async function pullSettings(): Promise<boolean> {
 }
 
 /**
- * API Key 与设置同一条口径：**始终**镜像，不看 `Settings.sync`。
+ * API Key 与设置同一条口径：**始终**镜像，不看 `Settings.syncHighlights`。
  *
  * 搬的是密文 + 包装密钥**这一对**：分开搬会出现「密文到了、密钥在路上」的窗口，
  * 而拿到密文解不开的那个设备会把它当坏值处理。
@@ -299,7 +300,7 @@ export async function mergeRemoteKeys(keys: readonly string[]): Promise<SyncRepo
     // 本地没有这一页时**也要过墓碑**：删最后一条会把整页记录删掉，只看并集的话
     // 它会在下一次拉取时原样长回来。
     const merged = mergePage(
-      localPage ?? {url: '', title: '', createdAt: 0, highlights: []},
+      localPage ?? {url: '', title: '', createdAtSec: 0, highlights: []},
       remotePage,
       signaturesOf(tombstones, key)
     )
@@ -366,7 +367,7 @@ export interface SyncState {
 export async function syncState(current?: Settings): Promise<SyncState> {
   const settings = current ?? (await loadSettings())
   return {
-    enabled: settings.sync,
+    enabled: settings.syncHighlights,
     bytes: await totalBytes(),
     limit: TOTAL_LIMIT,
     pages: (await syncPageKeys()).length

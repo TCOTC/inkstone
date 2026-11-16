@@ -15,7 +15,7 @@ import {formatDate} from '../shared/date'
 import {filterPages, sortPages} from '../shared/library'
 import {readSelectedPage, selectedPageHash, settingsGroupHash, withHighlightAnchor} from '../shared/route'
 import {type HighlightRecord, type PageRecord} from '../shared/types'
-import {clearUnresolved, loadUnresolved, type UnresolvedEntry} from '../shared/unresolved'
+import {clearUnresolved, listUnresolved, type UnresolvedPage} from '../shared/unresolved'
 import {hostOf} from '../shared/url'
 
 const pages = shallowRef<PageRecord[]>([])
@@ -26,7 +26,7 @@ const detailRef = ref<HTMLElement | null>(null)
 
 /** 右列当前显示未定位清单，而不是某一页的划线。 */
 const showUnresolved = ref(false)
-const unresolved = shallowRef<UnresolvedEntry[]>([])
+const unresolved = shallowRef<UnresolvedPage[]>([])
 
 const unresolvedTotal = computed(() =>
   unresolved.value.reduce((sum, entry) => sum + entry.items.length, 0)
@@ -55,20 +55,20 @@ const currentPage = computed(
 const detailRows = computed(() =>
   (currentPage.value?.highlights ?? []).map((highlight) => ({
     highlight,
-    date: formatDate(highlight.createdAt)
+    date: formatDate(highlight.createdAtSec)
   }))
 )
 
 /** 列表行的一行元信息：站点 · 日期 · 条数。 */
 function rowMeta(page: PageRecord): string {
-  return [hostOf(page.url), formatDate(page.createdAt), `${page.highlights.length} 条`]
+  return [hostOf(page.url), formatDate(page.createdAtSec), `${page.highlights.length} 条`]
     .filter(Boolean)
     .join(' · ')
 }
 
 /** 详情页的元信息：站点 · 创建日期 · 条数。一行说完，不再另置计数。 */
 function detailMeta(page: PageRecord): string {
-  return [hostOf(page.url), formatDate(page.createdAt), `${page.highlights.length} 条划线`]
+  return [hostOf(page.url), formatDate(page.createdAtSec), `${page.highlights.length} 条划线`]
     .filter(Boolean)
     .join(' · ')
 }
@@ -125,7 +125,7 @@ watch([selected, showUnresolved], async () => {
 
 onMounted(async () => {
   pages.value = sortPages(await listPages())
-  unresolved.value = Object.values(await loadUnresolved()).sort((a, b) => b.at - a.at)
+  unresolved.value = await listUnresolved()
   ensureSelection()
 })
 </script>
@@ -228,7 +228,7 @@ onMounted(async () => {
                 :key="item.id"
                 class="unresolved-line"
                 :title="`错误码 ${item.errCode}`"
-              >{{ item.text }}</p>
+              >{{ item.preview }}</p>
             </section>
           </div>
         </template>

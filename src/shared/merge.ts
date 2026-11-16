@@ -15,6 +15,7 @@
  * 这个模块是纯函数（不碰 storage），同步的传输部分在 `shared/sync.ts`。
  */
 import {stripWs} from './whitespace'
+import {mergeExtra} from './rowCodec'
 import type {HighlightRecord, PageRecord} from './types'
 
 /** 分隔符：三个字段本来就可能含任意字符，用 NUL 才不会拼出歧义。 */
@@ -24,7 +25,7 @@ const SEP = '\u0000'
  * 内容签名：同一条划线在两台设备上的签名相同。
  *
  * 只取定位三元组，且按 `stripWs` 归一——空白差异（两端 DOM 的换行/缩进不同）
- * 不该让我们把同一条线当成两条。`createdAt` 不参与：同一段文字在两台设备上先后划过时，
+ * 不该让我们把同一条线当成两条。`createdAtSec` 不参与：同一段文字在两台设备上先后划过时，
  * 时间戳不同，但它们是「同一处高亮」。
  */
 export function highlightSignature(highlight: Pick<HighlightRecord, 'text' | 'prev' | 'next'>): string {
@@ -63,19 +64,19 @@ export interface MergeResult {
  * 合并一页。
  *
  * `local` 是权威（顺序与 id 都保留），`remote` 只提供本机没有的内容。
- * `deleted` 是该页的墓碑签名集合。
+ * `tombstones` 是该页已删划线的签名集合。
  */
 export function mergePage(
   local: PageRecord,
   remote: PageRecord | null,
-  deleted: ReadonlySet<string>
+  tombstones: ReadonlySet<string>
 ): MergeResult {
   if (!remote) return {page: local, added: 0, dropped: 0}
 
   const kept: HighlightRecord[] = []
   let dropped = 0
   for (const item of local.highlights) {
-    if (deleted.has(highlightSignature(item))) dropped += 1
+    if (tombstones.has(highlightSignature(item))) dropped += 1
     else kept.push(item)
   }
 
@@ -85,8 +86,8 @@ export function mergePage(
 
   for (const item of remote.highlights) {
     const sig = highlightSignature(item)
-    if (deleted.has(sig) || seen.has(sig)) {
-      if (deleted.has(sig)) dropped += 1
+    if (tombstones.has(sig) || seen.has(sig)) {
+      if (tombstones.has(sig)) dropped += 1
       continue
     }
     seen.add(sig)
@@ -94,14 +95,15 @@ export function mergePage(
     nextId += 1
   }
 
-  return {
-    page: {
-      url: local.url || remote.url,
-      title: local.title || remote.title,
-      createdAt: local.createdAt || remote.createdAt,
-      highlights: [...kept, ...added]
-    },
-    added: added.length,
-    dropped
+  const merged: PageRecord = {
+    url: local.url || remote.url,
+    title: local.title || remote.title,
+    createdAtSec: local.createdAtSec || remote.createdAtSec,
+    highlights: [...kept, ...added]
   }
+  // 页面级的未知字段取并集，本机优先：远端（可能是新版本）带来的键不会被本机抹掉。
+  const extra = mergeExtra(remote.extra, local.extra)
+  if (extra) merged.extra = extra
+
+  return {page: merged, added: added.length, dropped}
 }

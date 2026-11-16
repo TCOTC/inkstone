@@ -48,5 +48,5 @@ export function filterPages(pages: readonly PageRecord[], query: string): PageRe
 
 /** 按创建时间倒序（新的在前），同时间用 URL 兜底，保证顺序稳定。 */
 export function sortPages(pages: readonly PageRecord[]): PageRecord[] {
-  return [...pages].sort((a, b) => b.createdAt - a.createdAt || a.url.localeCompare(b.url))
+  return [...pages].sort((a, b) => b.createdAtSec - a.createdAtSec || a.url.localeCompare(b.url))
 }

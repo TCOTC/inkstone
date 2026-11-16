@@ -152,7 +152,7 @@ test('两个动作的 system 不一样：翻译是译者 + 助手，解释是阅
   assert.ok(translated.includes('译者'), translated)
   assert.ok(translated.includes('看懂'), translated)
   assert.ok(explained.includes('阅读助手'), explained)
-  // 旧版是「只输出译文，不解释」，已按用户要求去掉。
+  // 曾经写过「只输出译文，不解释」，已按用户要求去掉。
   assert.ok(!translated.includes('不解释'), translated)
 })
 

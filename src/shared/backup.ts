@@ -16,12 +16,8 @@ import {type PageRecord, type Settings} from './types'
 /** 文件标识。用户选错文件时给准确提示，比「解析失败」有用。 */
 export const BACKUP_FORMAT = 'inkstone-backup'
 
-/** 格式版本。改字段含义时加一；读取端只认自己认识的版本。 */
-export const BACKUP_VERSION = 1
-
 export interface BackupFile {
   format: string
-  version: number
   exportedAt: number
   settings: Settings
   pages: PageRow[]
@@ -32,7 +28,6 @@ export async function buildBackup(): Promise<BackupFile> {
   const pages = await listPages()
   return {
     format: BACKUP_FORMAT,
-    version: BACKUP_VERSION,
     exportedAt: Date.now(),
     settings: await loadSettings(),
     pages: pages.map(encodePage)
@@ -46,9 +41,8 @@ export type BackupParse =
 /**
  * 解析备份文件。
  *
- * 只有一条版本规则：`version` 必须等于当前支持的值。不等就直接拒绝，不做任何
- * 「猜旧字段」的兼容读取——字段含义一旦改了，硬读会得到「看起来导入成功、
- * 其实一半数据是错的」。
+ * 只认自己这一种格式：`format` 对不上直接拒绝，不做任何「猜旧字段」的读取——
+ * 字段含义一旦改了，硬读会得到「看起来导入成功、其实一半数据是错的」。
  */
 export function parseBackup(data: unknown): BackupParse {
   if (!data || typeof data !== 'object') return {ok: false, error: '文件内容不是 JSON 对象。'}
@@ -56,9 +50,6 @@ export function parseBackup(data: unknown): BackupParse {
   const file = data as Partial<BackupFile>
   if (file.format !== BACKUP_FORMAT) {
     return {ok: false, error: '这不是 Inkstone 的备份文件。'}
-  }
-  if (file.version !== BACKUP_VERSION) {
-    return {ok: false, error: `备份版本 ${String(file.version)} 与当前扩展支持的 ${BACKUP_VERSION} 不一致。`}
   }
   if (!Array.isArray(file.pages)) return {ok: false, error: '备份里没有 pages 数组。'}
 

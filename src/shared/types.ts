@@ -1,8 +1,8 @@
 import {DEFAULT_PEN_STYLE, type PenStyle} from './styles'
 import {DEFAULT_AI_LANGUAGE, type AiAction} from './prompt'
 
-/** 提示词的两块：`system` 是角色设定，`prompt` 是 user 任务模板。 */
-export type PromptKind = 'system' | 'prompt'
+/** 提示词的两块：`system` 是角色设定，`user` 是任务模板。 */
+export type PromptKind = 'system' | 'user'
 
 /**
  * 一块提示词两种状态：`default` 每次都取内置文案（改默认就能跟着升级），`custom` 取设置里那份。
@@ -11,6 +11,14 @@ export type PromptMode = 'default' | 'custom'
 
 /** 四个槽（两个动作 × 两块）各自的模式。 */
 export type PromptModes = Record<AiAction, Record<PromptKind, PromptMode>>
+
+/**
+ * 跨版本保留的未知字段。
+ *
+ * 只存**本版本不认识的键**，原样带回写入端，所以「新版导出 → 旧版导入 → 旧版导出」
+ * 不会把新字段抹掉。它不参与任何判断，也不该被业务代码读写。
+ */
+export type Extra = Record<string, unknown>
 
 /**
  * 划线记录。全部字段都是「运行时有人读」的，没有预留位；加字段前先说清它支撑哪个功能。
@@ -25,10 +33,10 @@ export interface HighlightRecord {
   prev: string
   /** 后文，含原始空白 */
   next: string
-  /** 秒级时间戳，仅展示用 */
-  createdAt: number
-  /** 本地新划的（导入数据里没有这个字段） */
-  local?: boolean
+  /** 秒级时间戳，仅展示用。名字带单位，免得与毫秒的 tombstone / meta 混用 */
+  createdAtSec: number
+  /** 本版本不认识的存储字段（见 `Extra`） */
+  extra?: Extra
 }
 
 /**
@@ -36,23 +44,25 @@ export interface HighlightRecord {
  * 站点名从 URL 派生，不存。
  */
 export interface PageRecord {
-  /** 规范形式的 URL（`pageKey`）；也是存储键的来源 */
+  /** 规范形式的 URL（`pageKey`）；`decodePage` 负责归一，所以与存储键必然一致 */
   url: string
   title: string
   /** 秒级时间戳；「我的划线」的唯一排序键 */
-  createdAt: number
+  createdAtSec: number
   highlights: HighlightRecord[]
+  /** 本版本不认识的存储字段（见 `Extra`） */
+  extra?: Extra
 }
 
 export interface Settings {
   /** 1=荧光笔 2=实线下划线 3=虚线下划线 4=半透明底+下划线 */
   penStyle: PenStyle
   /** 关掉后 content script 不渲染也不响应划词 */
-  enabled: boolean
-  /** 开启后把页行镜像到 `chrome.storage.sync`（走 Chrome 自带账号同步） */
-  sync: boolean
-  /** 翻译目标语言（含 `auto`）：中文译成英语、其余译成简体中文 */
-  aiLang: string
+  highlightEnabled: boolean
+  /** 只管划线数据是否镜像到 `storage.sync`；设置与 Key 始终镜像 */
+  syncHighlights: boolean
+  /** 翻译**目标**语言（含 `auto`）：中文译成英语、其余译成简体中文 */
+  translateLang: string
   /**
    * **默认关**：开启后首 token 慢很多，而 service worker 的 30 秒空闲判定正好卡在这段；
    * 与联网搜索叠加时还会变成深度思考搜索（多步、最慢）。
@@ -68,19 +78,21 @@ export interface Settings {
   aiPromptTranslate: string
   /** 「解释」的自定义 user 模板，规则同上 */
   aiPromptExplain: string
+  /** 本版本不认识的可序列化字段（见 `Extra`）：回退到旧版本再装新版时不至于丢新设置 */
+  extra?: Extra
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   penStyle: DEFAULT_PEN_STYLE,
-  enabled: true,
+  highlightEnabled: true,
   // 默认关：要占 sync 配额，而且只有登录了 Chrome 才有意义。
-  sync: false,
+  syncHighlights: false,
   // 引用常量而不是再写一遍字面量：两处各写一个值必然漂移。
-  aiLang: DEFAULT_AI_LANGUAGE,
+  translateLang: DEFAULT_AI_LANGUAGE,
   aiThinking: false,
   aiPromptMode: {
-    translate: {system: 'default', prompt: 'default'},
-    explain: {system: 'default', prompt: 'default'}
+    translate: {system: 'default', user: 'default'},
+    explain: {system: 'default', user: 'default'}
   },
   // 自定义文案的默认值是空串（= 没写过）：内置文案只在 `prompt.ts` 定义一次，这里再存一份就会漂移。
   aiSystemTranslate: '',

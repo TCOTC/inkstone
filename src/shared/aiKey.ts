@@ -6,18 +6,14 @@
  * 包装密钥不写死、也不用扩展 ID 派生：开发版 ID 随加载路径变，派生会让 key 解不开。
  *
  * 密文与包装密钥会**成对**镜像到 `storage.sync`（见 `shared/sync.ts`）：分开搬运会出现
- * 「密文能拿到、密钥没有」的死状态，而本模块每次都会重新生成一把包装密钥。
+ * 「密文能拿到、密钥没有」的死状态，而缺密钥时这里只会解不开（不会凭空生成一把去覆盖同步区的）。
  */
 
-export const AI_KEY_STORAGE = 'ai:key'
-/** 与密文分两个键，便于单独重置。 */
-export const AI_WRAP_STORAGE = 'ai:wrap'
+import {AI_KEY_STORAGE, AI_WRAP_STORAGE} from './storageKeys'
 
 /** 只防手滑粘进一大段东西。 */
 const MAX_KEY_LENGTH = 400
 
-/** 带版本是为了将来换算法时能识别旧格式，也用来区分「旧版明文」。 */
-const TOKEN_PREFIX = 'v1:'
 /** AES-GCM 的 IV 长度（规范要求 12 字节）。 */
 const IV_BYTES = 12
 /** 包装密钥长度（AES-256）。 */
@@ -50,7 +46,7 @@ async function importWrapKey(raw: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
 }
 
 /**
- * 加密。返回 `v1:<base64(iv || ciphertext)>`。
+ * 加密。返回 `base64(iv || ciphertext)`。
  *
  * AES-GCM 带认证标签：密文被改过就解不开（返回 null），不会静默给出错误明文。
  * IV 每次随机——重复 IV 会让 AES-GCM 直接失去安全性，这是最容易写错的一处。
@@ -64,11 +60,11 @@ export async function sealKey(plain: string, wrapKeyRaw: Uint8Array<ArrayBuffer>
   const joined = new Uint8Array(iv.length + cipher.length)
   joined.set(iv, 0)
   joined.set(cipher, iv.length)
-  return TOKEN_PREFIX + toBase64(joined)
+  return toBase64(joined)
 }
 
 /**
- * 解密。任何失败（前缀不对、base64 坏了、认证失败、密钥不匹配）都返回 `null`。
+ * 解密。任何失败（base64 坏了、长度不够、认证失败、密钥不匹配）都返回 `null`。
  *
  * **不抛错**是有意的：调用方只想问「能拿到 key 吗」，拿不到就当没配，
  * 让用户重填比在页面上抛一个 WebCrypto 的 DOMException 有用。
@@ -77,8 +73,7 @@ export async function openKey(
   token: string,
   wrapKeyRaw: Uint8Array<ArrayBuffer>
 ): Promise<string | null> {
-  if (!token.startsWith(TOKEN_PREFIX)) return null
-  const bytes = fromBase64(token.slice(TOKEN_PREFIX.length))
+  const bytes = fromBase64(token)
   if (!bytes || bytes.length <= IV_BYTES) return null
   try {
     const key = await importWrapKey(wrapKeyRaw)

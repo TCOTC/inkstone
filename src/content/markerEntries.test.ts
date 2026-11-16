@@ -8,7 +8,7 @@ import {FUZZY_MODE, type RelocateResult} from '../shared/relocate'
 import type {HighlightRecord} from '../shared/types'
 
 function highlight(id: number, text = `第${id}条`): HighlightRecord {
-  return {id, text, prev: '', next: '', createdAt: 1}
+  return {id, text, prev: '', next: '', createdAtSec: 1}
 }
 
 function result(mode: number, nodeIndex: number, start = 0): RelocateResult {

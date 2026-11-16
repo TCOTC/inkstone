@@ -4,14 +4,14 @@ import {filterPages, sortPages} from './library'
 import type {HighlightRecord, PageRecord} from './types'
 
 function highlight(overrides: Partial<HighlightRecord> = {}): HighlightRecord {
-  return {id: 1, text: '原文', prev: '', next: '', createdAt: 0, ...overrides}
+  return {id: 1, text: '原文', prev: '', next: '', createdAtSec: 0, ...overrides}
 }
 
 function page(overrides: Partial<PageRecord> = {}): PageRecord {
   return {
     url: 'https://example.com/a',
     title: '标题',
-    createdAt: 0,
+    createdAtSec: 0,
     highlights: [highlight()],
     ...overrides
   }
@@ -59,12 +59,12 @@ test('filterPages：划线正文在搜索范围里', () => {
 })
 
 test('sortPages：按创建时间倒序，不修改原数组', () => {
-  const pages = [page({url: 'https://a.com/1', createdAt: 10}), page({url: 'https://a.com/2', createdAt: 30})]
+  const pages = [page({url: 'https://a.com/1', createdAtSec: 10}), page({url: 'https://a.com/2', createdAtSec: 30})]
   assert.deepEqual(sortPages(pages).map((p) => p.url), ['https://a.com/2', 'https://a.com/1'])
   assert.deepEqual(pages.map((p) => p.url), ['https://a.com/1', 'https://a.com/2'])
 })
 
 test('sortPages：同一时间按 URL 字典序，顺序稳定', () => {
-  const pages = [page({url: 'https://a.com/b', createdAt: 5}), page({url: 'https://a.com/a', createdAt: 5})]
+  const pages = [page({url: 'https://a.com/b', createdAtSec: 5}), page({url: 'https://a.com/a', createdAtSec: 5})]
   assert.deepEqual(sortPages(pages).map((p) => p.url), ['https://a.com/a', 'https://a.com/b'])
 })

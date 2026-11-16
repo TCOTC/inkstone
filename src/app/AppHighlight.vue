@@ -21,9 +21,9 @@ const penStyle = computed<PenStyle>({
   set: (value) => void updateSettings({penStyle: value})
 })
 
-const enabled = computed<boolean>({
-  get: () => settings.value.enabled,
-  set: (value) => void updateSettings({enabled: value})
+const highlightEnabled = computed<boolean>({
+  get: () => settings.value.highlightEnabled,
+  set: (value) => void updateSettings({highlightEnabled: value})
 })
 </script>
 
@@ -45,7 +45,7 @@ const enabled = computed<boolean>({
       <label class="row">
         <span>在网页上启用</span>
         <!-- 语义仍是原生 checkbox（role="switch" 让读屏读成「开关」）。 -->
-        <input v-model="enabled" type="checkbox" role="switch" />
+        <input v-model="highlightEnabled" type="checkbox" role="switch" />
       </label>
     </div>
   </section>

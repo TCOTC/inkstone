@@ -5,10 +5,8 @@
  * 锁身份用 **`looseKey` 而不是存储键**：同一条记录可能被多个 URL 通过回退匹配指向，
  * 按存储键抢锁等于各抢一把。详见 `docs/design.md` §4.6。
  */
+import {lockStorageKey} from './storageKeys'
 import {looseKey} from './url'
-
-/** 写锁的键前缀。锁住在 storage 里，才能被别的标签页看到。 */
-export const LOCK_PREFIX = 'lock:'
 
 /** 持锁的标签页被关掉 / 扩展重载时，超过它就自动失效。 */
 const LOCK_TTL_MS = 5000
@@ -33,7 +31,7 @@ export function isLiveLock(value: unknown): boolean {
 
 /** 完整的存储键（`LOCK_PREFIX` + `looseKey(url)`）。 */
 export function lockKey(url: string): string {
-  return LOCK_PREFIX + looseKey(url)
+  return lockStorageKey(looseKey(url))
 }
 
 function sleep(ms: number): Promise<void> {

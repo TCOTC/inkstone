@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {BACKUP_FORMAT, BACKUP_VERSION, backupFileName, parseBackup} from './backup'
+import {BACKUP_FORMAT, backupFileName, parseBackup} from './backup'
 import {DEFAULT_AI_LANGUAGE} from './prompt'
 import {encodePage} from './rowCodec'
 import {DEFAULT_SETTINGS, type PageRecord} from './types'
@@ -9,21 +9,20 @@ function page(): PageRecord {
   return {
     url: 'https://example.com/a',
     title: '标题',
-    createdAt: 100,
-    highlights: [{id: 1, text: '原文', prev: '前文', next: '后文', createdAt: 50}]
+    createdAtSec: 100,
+    highlights: [{id: 1, text: '原文', prev: '前文', next: '后文', createdAtSec: 50}]
   }
 }
 
 function backup(patch: Record<string, unknown> = {}): unknown {
   return {
     format: BACKUP_FORMAT,
-    version: BACKUP_VERSION,
     exportedAt: 1,
     settings: {
       penStyle: 3,
-      enabled: false,
-      sync: true,
-      aiLang: 'ja',
+      highlightEnabled: false,
+      syncHighlights: true,
+      translateLang: 'ja',
       aiThinking: true
     },
     pages: [encodePage(page())],
@@ -41,9 +40,9 @@ test('parseBackup：认得的文件解析出页面与设置', () => {
   assert.deepEqual(result.settings, {
     ...DEFAULT_SETTINGS,
     penStyle: 3,
-    enabled: false,
-    sync: true,
-    aiLang: 'ja',
+    highlightEnabled: false,
+    syncHighlights: true,
+    translateLang: 'ja',
     aiThinking: true
   })
 })
@@ -55,18 +54,8 @@ test('parseBackup：格式不对时明确说「不是备份」', () => {
   assert.match(result.error, /不是 Inkstone 的备份/)
 })
 
-test('parseBackup：版本号不等于当前版本时拒绝，而不是硬读', () => {
-  const newer = parseBackup(backup({version: BACKUP_VERSION + 1}))
-  assert.equal(newer.ok, false)
-  if (newer.ok) return
-  assert.match(newer.error, /与当前扩展支持的/)
-
-  const older = parseBackup(backup({version: 0}))
-  assert.equal(older.ok, false)
-})
-
 test('parseBackup：没有 pages 或有坏行时给出可读的原因', () => {
-  const missing = parseBackup({format: BACKUP_FORMAT, version: 1})
+  const missing = parseBackup({format: BACKUP_FORMAT})
   assert.equal(missing.ok, false)
 
   const broken = parseBackup(backup({pages: [{n: 'oops'}]}))
@@ -82,10 +71,10 @@ test('parseBackup：设置缺失或非法时按默认值补齐', () => {
   assert.deepEqual(result.settings, {
     ...DEFAULT_SETTINGS,
     penStyle: 1,
-    enabled: true,
-    sync: false,
-    // 引用常量而不是字面量：默认语言改过一次（'zh' → auto），写死会让用例无故变红。
-    aiLang: DEFAULT_AI_LANGUAGE,
+    highlightEnabled: true,
+    syncHighlights: false,
+    // 引用常量而不是字面量：写死一个语言代码会让用例在默认值变动时无故变红。
+    translateLang: DEFAULT_AI_LANGUAGE,
     aiThinking: false
   })
 

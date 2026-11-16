@@ -7,8 +7,9 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import {isLiveLock, lockKey, LOCK_PREFIX, withPageLock, withPageLocks} from './lock'
+import {isLiveLock, lockKey, withPageLock, withPageLocks} from './lock'
 import {installStorage, type Store} from './storageFixture'
+import {LOCK_PREFIX} from './storageKeys'
 
 const URL_A = 'https://example.com/a'
 const URL_B = 'https://example.com/b'

@@ -292,7 +292,7 @@ export class PagePanel {
 
     const text = document.createElement('span')
     text.className = 'text'
-    text.textContent = item.text || '（无文字）'
+    text.textContent = item.preview || '（无文字）'
 
     row.append(text)
     return row

@@ -8,8 +8,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {addHighlight, clearAll, deleteHighlight, getPageByUrl, importPages, listPages} from './db'
-import {encodePage, pageStorageKey, type PageRow} from './rowCodec'
+import {encodePage, type PageRow} from './rowCodec'
 import {installStorage, type Store} from './storageFixture'
+import {pageStorageKey} from './storageKeys'
 import type {HighlightRecord, PageRecord} from './types'
 
 /** 假的 `chrome.storage.local`（见 `storageFixture.ts`）。每次操作都异步等一会儿。 */
@@ -17,12 +18,12 @@ function installChrome(store: Store, delay = 2): void {
   installStorage(store, delay)
 }
 
-function draft(text: string): Omit<HighlightRecord, 'id' | 'local'> {
-  return {text, prev: '', next: '', createdAt: 1}
+function draft(text: string): Omit<HighlightRecord, 'id'> {
+  return {text, prev: '', next: '', createdAtSec: 1}
 }
 
 function page(url: string, highlights: HighlightRecord[]): PageRecord {
-  return {url, title: '标题', createdAt: 1, highlights}
+  return {url, title: '标题', createdAtSec: 1, highlights}
 }
 
 function row(highlights: HighlightRecord[]): PageRow {
@@ -57,15 +58,13 @@ test('新划线的 id 从 1 开始，在已有最大序号之后继续', async (
   store.set(
     pageStorageKey(url),
     row([
-      {id: 1, text: '旧一', prev: '', next: '', createdAt: 0},
-      {id: 2, text: '旧二', prev: '', next: '', createdAt: 0}
+      {id: 1, text: '旧一', prev: '', next: '', createdAtSec: 0},
+      {id: 2, text: '旧二', prev: '', next: '', createdAtSec: 0}
     ])
   )
 
   const page_ = await addHighlight(url, draft('新的'), '标题')
   assert.deepEqual(page_.highlights.map((item) => item.id), [1, 2, 3])
-  assert.equal(page_.highlights[2]?.local, true)
-  assert.equal(page_.highlights[0]?.local, undefined)
 })
 
 test('删掉序号最大那条后再划，复用那个序号（页内唯一即可）', async () => {
@@ -102,11 +101,60 @@ test('导入不覆盖并发新增的本地线', async () => {
 
   await Promise.all([
     addHighlight(url, draft('本地新划'), '标题'),
-    importPages([page(url, [{id: 1, text: '导入的', prev: '', next: '', createdAt: 0}])])
+    importPages([page(url, [{id: 1, text: '导入的', prev: '', next: '', createdAtSec: 0}])])
   ])
 
   const saved = (store.get(pageStorageKey(url)) as PageRow).h
   assert.deepEqual(saved.map((item) => item.x).sort(), ['导入的', '本地新划'].sort())
+})
+
+test('导入按内容签名并集：同一条不重复，本机独有的保留并重新编号', async () => {
+  const store: Store = new Map()
+  installChrome(store)
+  const url = 'https://example.com/union'
+  // 本机已有：一条与备份同内容（会被备份版取代），一条本条独有。
+  store.set(
+    pageStorageKey(url),
+    row([
+      {id: 1, text: '同一条', prev: '', next: '', createdAtSec: 1},
+      {id: 2, text: '仅本机', prev: '', next: '', createdAtSec: 1}
+    ])
+  )
+
+  const summary = await importPages([
+    page(url, [
+      {id: 1, text: '同一条', prev: '', next: '', createdAtSec: 1},
+      {id: 2, text: '来自备份', prev: '', next: '', createdAtSec: 1}
+    ])
+  ])
+
+  const saved = (store.get(pageStorageKey(url)) as PageRow).h
+  assert.deepEqual(saved.map((item) => item.x), ['同一条', '来自备份', '仅本机'])
+  // 保留的那条重新编号，避免与导入数据撞号。
+  assert.deepEqual(saved.map((item) => item.i), [1, 2, 3])
+  assert.equal(summary.keptHighlights, 1)
+  assert.equal(summary.importedHighlights, 2)
+})
+
+test('导入旧备份时，本机行里的未知字段不会被抹掉', async () => {
+  const store: Store = new Map()
+  installChrome(store)
+  const url = 'https://example.com/future'
+  // 本机这份来自更新的版本：页面与划线各带一个旧版本不认识的键。
+  store.set(pageStorageKey(url), {
+    u: url,
+    t: '标题',
+    c: 1,
+    h: [{i: 1, x: '原文', p: '', q: '', c: 1, futureFlag: 'keep-me'}],
+    futurePage: 'keep-me-too'
+  } as unknown as PageRow)
+
+  // 旧版本导出的备份：同一条线，但没有那两个键。
+  await importPages([page(url, [{id: 1, text: '原文', prev: '', next: '', createdAtSec: 1}])])
+
+  const saved = store.get(pageStorageKey(url)) as PageRow
+  assert.equal((saved.h[0] as unknown as Record<string, unknown>).futureFlag, 'keep-me')
+  assert.equal((saved as unknown as Record<string, unknown>).futurePage, 'keep-me-too')
 })
 
 test('写锁用完就释放，不在 storage 里留下垃圾', async () => {
@@ -152,7 +200,7 @@ test('getPageByUrl：唯一命中追踪参数版本时采用它；多处命中�
   const store: Store = new Map()
   installChrome(store)
   const clean = 'https://example.com/loose'
-  store.set(pageStorageKey(`${clean}?utm_source=x`), row([{id: 1, text: '甲', prev: '', next: '', createdAt: 1}]))
+  store.set(pageStorageKey(`${clean}?utm_source=x`), row([{id: 1, text: '甲', prev: '', next: '', createdAtSec: 1}]))
 
   // 预筛（只在「? 之前的部分」相同时才去算 looseKey）不能改变结论：
   // 带 utm_ 的键仍应靠回退匹配命中。
@@ -160,7 +208,7 @@ test('getPageByUrl：唯一命中追踪参数版本时采用它；多处命中�
   assert.equal(found?.highlights.length, 1)
 
   // 两处都能宽松匹配（不同 query 但都不是追踪参数）时仍会算 looseKey，结论仍是唯一/非唯一。
-  store.set(pageStorageKey(`${clean}?a=1`), row([{id: 1, text: '乙', prev: '', next: '', createdAt: 1}]))
+  store.set(pageStorageKey(`${clean}?a=1`), row([{id: 1, text: '乙', prev: '', next: '', createdAtSec: 1}]))
   assert.equal(await getPageByUrl(`${clean}?b=2`), null)
 })
 
@@ -169,7 +217,7 @@ test('getPageByUrl：路径不同但 query 相同的键不会被预筛当候选'
   installChrome(store)
   store.set(
     pageStorageKey('https://example.com/other?utm_source=x'),
-    row([{id: 1, text: '甲', prev: '', next: '', createdAt: 1}])
+    row([{id: 1, text: '甲', prev: '', next: '', createdAtSec: 1}])
   )
   assert.equal(await getPageByUrl('https://example.com/mine?utm_source=x'), null)
 })
@@ -201,7 +249,7 @@ test('还有别的划线时只删那一条，整页记录留着', async () => {
   assert.ok(store.has(pageStorageKey(url)))
 })
 
-test('老版本留下的空页行不再出现在列表里，顺手被清掉', async () => {
+test('空页行不出现在列表里', async () => {
   const store: Store = new Map()
   installChrome(store)
   const stale = 'https://example.com/stale'
@@ -211,7 +259,6 @@ test('老版本留下的空页行不再出现在列表里，顺手被清掉', as
   const pages = await listPages()
 
   assert.deepEqual(pages.map((item) => item.url), ['https://example.com/kept'])
-  assert.equal(store.has(pageStorageKey(stale)), false)
 })
 
 test('导入里带 0 条的页行不落地', async () => {
@@ -231,13 +278,13 @@ test('clearAll 连同步端的页行一起清（否则下次拉取会把整库�
   installStorage(store, 0, remote)
   const url = 'https://example.com/wipe'
   const key = pageStorageKey(url)
-  store.set(key, row([{id: 1, text: '甲', prev: '', next: '', createdAt: 1}]))
-  remote.set(key, row([{id: 1, text: '甲', prev: '', next: '', createdAt: 1}]))
-  store.set('deleted', {[url]: {'abc': Date.now()}})
+  store.set(key, row([{id: 1, text: '甲', prev: '', next: '', createdAtSec: 1}]))
+  remote.set(key, row([{id: 1, text: '甲', prev: '', next: '', createdAtSec: 1}]))
+  store.set('tombstones', {[url]: {'abc': Date.now()}})
 
   await clearAll()
 
   assert.equal(store.has(key), false)
   assert.equal(remote.has(key), false)
-  assert.equal(store.has('deleted'), false)
+  assert.equal(store.has('tombstones'), false)
 })

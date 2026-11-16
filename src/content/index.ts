@@ -5,7 +5,6 @@
  */
 import {createAnchorFromRange, type AnchorFailure} from '../shared/anchor'
 import {addHighlight, deleteHighlight, getPageByUrl} from '../shared/db'
-import {AI_KEY_STORAGE} from '../shared/aiKey'
 import {
   type AiReadyReply,
   type ContentMessage
@@ -13,8 +12,9 @@ import {
 import {type AiAction} from '../shared/prompt'
 import {relocateHighlight} from '../shared/relocate'
 import {readHighlightAnchor} from '../shared/route'
-import {encodePage, PAGE_PREFIX, pageStorageKey, type PageRow} from '../shared/rowCodec'
+import {encodePage, type PageRow} from '../shared/rowCodec'
 import {loadSettings, normalizeSettings} from '../shared/settings'
+import {AI_KEY_STORAGE, PAGE_PREFIX, pageStorageKey} from '../shared/storageKeys'
 import {MIN_TEXT_LEN} from '../shared/whitespace'
 import {PageTextIndex} from '../shared/textIndex'
 import {type PageRecord, type Settings} from '../shared/types'
@@ -187,7 +187,7 @@ async function boot(): Promise<void> {
    * 选区在点击浮层那一刻已经没了，所以原文与前后文都从 `askRange` 快照里取。
    * 卡片里换语言只影响那一次，**不写回设置**。
    */
-  function startAsk(action: AiAction, lang = settings.aiLang): void {
+  function startAsk(action: AiAction, lang = settings.translateLang): void {
     toolbar.hideAll()
     const range = askRange
     if (!range) return
@@ -265,7 +265,7 @@ async function boot(): Promise<void> {
    * 值没变就不发：`paint()` 会被主题变化、设置改动反复调到。
    */
   function reportCount(): void {
-    const total = settings.enabled ? (page?.highlights.length ?? 0) : 0
+    const total = settings.highlightEnabled ? (page?.highlights.length ?? 0) : 0
     if (total === reportedCount) return
     reportedCount = total
     try {
@@ -286,7 +286,7 @@ async function boot(): Promise<void> {
 
   /** 按当前设置重画。不重定位——主题/画笔变化只影响样式。 */
   function paint(nodes?: readonly Text[]): void {
-    if (!settings.enabled) return
+    if (!settings.highlightEnabled) return
     // 没有划线时不去建索引：那等于把整页文本节点遍历一遍，却什么都不产出。
     const textNodes = nodes ?? (items.length === 0 ? NO_NODES : index.indexData().nodes)
     highlighter.render(items, textNodes, {
@@ -301,7 +301,7 @@ async function boot(): Promise<void> {
    * 站点无关的 DOM 变动（广告、评论区、懒加载）不必全量重建索引。
    */
   function render(reason: 'load' | 'change' = 'load'): void {
-    if (!settings.enabled) return
+    if (!settings.highlightEnabled) return
     if (reason === 'change' && !highlighter.isStale()) {
       if (unresolvedCount === 0) return
       const now = performance.now()
@@ -321,9 +321,8 @@ async function boot(): Promise<void> {
         if (result.errCode !== 0) {
           unresolved.push({
             id: highlight.id,
-            text: highlight.text.length > 80 ? `${highlight.text.slice(0, 80)}…` : highlight.text,
-            errCode: result.errCode,
-            mode: result.mode
+            preview: highlight.text.length > 80 ? `${highlight.text.slice(0, 80)}…` : highlight.text,
+            errCode: result.errCode
           })
         }
       }
@@ -377,7 +376,7 @@ async function boot(): Promise<void> {
         text: result.anchor.core,
         prev: result.anchor.prev,
         next: result.anchor.next,
-        createdAt: Math.floor(Date.now() / 1000)
+        createdAtSec: Math.floor(Date.now() / 1000)
       },
       document.title
     )
@@ -406,7 +405,7 @@ async function boot(): Promise<void> {
    * 但入口还在原处，点一下就重载页面、把功能换回来。
    */
   function onMouseUp(event: MouseEvent): void {
-    if (!settings.enabled || isOverlayNode(event.target)) return
+    if (!settings.highlightEnabled || isOverlayNode(event.target)) return
     if (isEventInEditable(event) || isPageEditable()) return
 
     window.clearTimeout(toolbarTimer)
@@ -439,7 +438,7 @@ async function boot(): Promise<void> {
   }
 
   function onClick(event: MouseEvent): void {
-    if (!settings.enabled || isOverlayNode(event.target)) return
+    if (!settings.highlightEnabled || isOverlayNode(event.target)) return
 
     const hit = highlighter.hit(event.clientX, event.clientY)
     if (!hit) {
@@ -508,7 +507,7 @@ async function boot(): Promise<void> {
   }
 
   const observer = new MutationObserver((records) => {
-    if (!settings.enabled) return
+    if (!settings.highlightEnabled) return
     if (records.every((record) => isOurMutation(record.target))) return
     scheduleRender()
   })
@@ -517,7 +516,7 @@ async function boot(): Promise<void> {
   function onPanelMessage(message: ContentMessage): void {
     if (message?.type !== 'panel:toggle') return
     // 关掉扩展时页面上什么都没画，直接 toggle 会显示「本页没有划线」，容易被当成坏了。
-    if (settings.enabled) panel.toggle()
+    if (settings.highlightEnabled) panel.toggle()
     else panel.notice('扩展已在偏好设置里关闭。')
   }
   chrome.runtime.onMessage.addListener(onPanelMessage)
@@ -529,10 +528,10 @@ async function boot(): Promise<void> {
   ): void {
     if (area !== 'local') return
     if (!changes.settings) return
-    const wasEnabled = settings.enabled
+    const wasEnabled = settings.highlightEnabled
     settings = normalizeSettings(changes.settings.newValue)
-    // 模型 / 地址变了不影响「能不能用 AI」（那是 Key 决定的），所以这里只看总开关。
-    if (settings.enabled) {
+    // AI 能不能用只看 Key，所以这里只看高亮总开关。
+    if (settings.highlightEnabled) {
       // 从关到开：之前一次都没定位过，必须重新渲染，不能只重画。
       if (wasEnabled) paint()
       else render('load')
@@ -561,7 +560,7 @@ async function boot(): Promise<void> {
     changes: Record<string, chrome.storage.StorageChange>,
     area: chrome.storage.AreaName
   ): void {
-    if (area !== 'local' || !settings.enabled) return
+    if (area !== 'local' || !settings.highlightEnabled) return
 
     const ownKey = pageStorageKey(location.href)
     for (const [key, change] of Object.entries(changes)) {
@@ -602,7 +601,7 @@ async function boot(): Promise<void> {
   // hover 换色用 mousemove + 命中检测；浏览器已节流，这里再降一档频率。
   let hoverAt = 0
   function onMouseMove(event: MouseEvent): void {
-    if (!settings.enabled) return
+    if (!settings.highlightEnabled) return
     // 没有划线时先早退：`hitTest` 会先做一次 `caretRangeFromPoint`（122µs）才发现表是空的。
     if (highlighter.size === 0) return
     const now = performance.now()
@@ -627,7 +626,7 @@ async function boot(): Promise<void> {
    * 会直接返回旧值，而这里唯一的目的就是重量。
    */
   function resyncMarkers(): void {
-    if (stale || !settings.enabled || items.length === 0) return
+    if (stale || !settings.highlightEnabled || items.length === 0) return
     highlighter.invalidateMeasure()
     syncNavigators()
   }
